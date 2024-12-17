@@ -6,13 +6,13 @@ Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`
 
 ## Examples
 
-Pi calculation:
-
 Hello world:
 
 ```R
 "Hello, world!"& !printstr
 ```
+
+Pi calculation:
 
 ```R
 calc_pi^

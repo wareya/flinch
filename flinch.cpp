@@ -1,0 +1,1341 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <cassert>
+#include <limits>
+#include <variant>
+#include <cstdint>
+#include <cmath>
+#include <cstring>
+#include <iomanip>
+#include <memory>
+
+using namespace std;
+
+typedef uint32_t iword_t;
+
+enum TKind : iword_t
+{
+    GlobalVar,
+    GlobalVarDec,
+    GlobalVarLookup,
+    GlobalVarDecLookup,
+    
+    LocalVar,
+    LocalVarDec,
+    LocalVarLookup,
+    LocalVarDecLookup,
+    
+    FuncDec,
+    FuncLookup,
+    FuncEnd,
+    
+    LabelDec,
+    LabelLookup,
+    
+    Integer,
+    IntegerInline,
+    IntegerInlineBigDec,
+    IntegerInlineBigBin,
+    Double,
+    DoubleInline,
+    
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    ModAssign,
+    
+    Assign,
+    AssignVar,
+    Return,
+    Call,
+    CallEval,
+    
+    IfGoto,
+    IfGotoLabel,
+    
+    IfGotoLabelEQ,
+    IfGotoLabelNE,
+    IfGotoLabelLE,
+    IfGotoLabelGE,
+    IfGotoLabelLT,
+    IfGotoLabelGT,
+    
+    Goto,
+    GotoLabel,
+    
+    ScopeOpen,
+    ScopeClose,
+    
+    CmpEQ,
+    CmpNE,
+    CmpLE,
+    CmpGE,
+    CmpLT,
+    CmpGT,
+    
+    ArrayBuild,
+    ArrayIndex,
+    Clone,
+    //CloneDeep,
+    
+    ArrayLen,
+    ArrayLenMinusOne,
+    ArrayPushIn,
+    ArrayPopOut,
+    
+    StringLiteral,
+    StringLitReference,
+    
+    BuiltinCall,
+    
+    Exit,
+};
+
+#define TOKEN_LOG(NAME, TYPE)\
+vector<TYPE> token_##NAME##s;\
+iword_t get_token_##NAME##_num(TYPE s)\
+{\
+    auto n = token_##NAME##s.size();\
+    for (iword_t i = 0; i < n; i++)\
+    {\
+        if (token_##NAME##s[i] == s)\
+            return i;\
+    }\
+    token_##NAME##s.push_back(s);\
+    return n;\
+}\
+TYPE get_token_##NAME(iword_t n)\
+{\
+    return token_##NAME##s[n];\
+}
+
+TOKEN_LOG(string, string)
+TOKEN_LOG(func, string)
+TOKEN_LOG(varname, string)
+TOKEN_LOG(int, int64_t)
+TOKEN_LOG(double, double)
+
+struct Token
+{
+    TKind kind;
+    iword_t n;
+};
+
+struct DynamicType;
+struct Ref { DynamicType * ref; };
+
+struct Label { int loc; };
+struct Array { shared_ptr<vector<DynamicType>> items; };
+struct Func
+{
+    iword_t loc;
+    iword_t len;
+    iword_t name;
+};
+
+
+// DynamicType can hold any of these types
+struct DynamicType
+{
+    std::variant<int64_t, double, Ref, Label, Func, Array> value;
+
+    DynamicType() : value((int64_t)0) {}
+    DynamicType(int64_t v) : value(v) {}
+    DynamicType(int v) : value((int64_t)v) {}
+    DynamicType(short v) : value((int64_t)v) {}
+    DynamicType(char v) : value((int64_t)v) {}
+    DynamicType(double v) : value(v) {}
+    DynamicType(const Ref& v) : value(v) {}
+    DynamicType(const Label& l) : value(l) {}
+    DynamicType(const Func& f) : value(f) {}
+    DynamicType(const Array& a) : value(a) {}
+
+    DynamicType(const DynamicType& other) = default;
+    DynamicType(DynamicType&& other) noexcept = default;
+    DynamicType& operator=(const DynamicType& other) = default;
+    DynamicType& operator=(DynamicType&& other) noexcept = default;
+    
+    #define INFIX(WRAPPER1, WRAPPER2, OP, OP2)\
+        if (std::holds_alternative<int64_t>(value) && std::holds_alternative<int64_t>(other.value))\
+            return WRAPPER1(std::get<int64_t>(value) OP std::get<int64_t>(other.value));\
+        else if (std::holds_alternative<double>(value) && std::holds_alternative<double>(other.value))\
+            return WRAPPER2(std::get<double>(value) OP2 std::get<double>(other.value));\
+        else if (std::holds_alternative<int64_t>(value) && std::holds_alternative<double>(other.value))\
+            return WRAPPER2(std::get<int64_t>(value) OP2 std::get<double>(other.value));\
+        else if (std::holds_alternative<double>(value) && std::holds_alternative<int64_t>(other.value))\
+            return WRAPPER2(std::get<double>(value) OP2 std::get<int64_t>(other.value));\
+        throw std::runtime_error("Unsupported operation: non-numeric operands");
+        
+    #define COMMA ,
+    
+    DynamicType operator+(const DynamicType& other) const { INFIX(DynamicType, DynamicType, +, +) }
+    DynamicType operator-(const DynamicType& other) const { INFIX(DynamicType, DynamicType, -, -) }
+    DynamicType operator*(const DynamicType& other) const { INFIX(DynamicType, DynamicType, *, *) }
+    DynamicType operator/(const DynamicType& other) const { INFIX(DynamicType, DynamicType, /, /) }
+    DynamicType operator%(const DynamicType& other) const { INFIX(DynamicType, fmod, %, COMMA) }
+    
+    bool operator>=(const DynamicType& other) const { INFIX(!!, !!, >=, >=) }
+    bool operator<=(const DynamicType& other) const { INFIX(!!, !!, <=, <=) }
+    bool operator==(const DynamicType& other) const { INFIX(!!, !!, ==, ==) }
+    bool operator!=(const DynamicType& other) const { INFIX(!!, !!, !=, !=) }
+    bool operator>(const DynamicType& other) const { INFIX(!!, !!, >, >) }
+    bool operator<(const DynamicType& other) const { INFIX(!!, !!, <, <) }
+    
+    
+    #define AS_TYPE_X(TYPE, TYPENAME)\
+    TYPE & as_##TYPENAME()\
+    {\
+        if (std::holds_alternative<TYPE>(value))\
+            return std::get<TYPE>(value);\
+        throw std::runtime_error("Value is not of type " #TYPENAME);\
+    }
+    
+    AS_TYPE_X(int64_t, int)
+    AS_TYPE_X(double, double)
+    AS_TYPE_X(Ref, ref)
+    AS_TYPE_X(Label, label)
+    AS_TYPE_X(Func, func)
+    AS_TYPE_X(Array, array)
+    
+    bool is_int() { return std::holds_alternative<int64_t>(value); }
+    bool is_double() { return std::holds_alternative<double>(value); }
+    bool is_ref() { return std::holds_alternative<Ref>(value); }
+    bool is_label() { return std::holds_alternative<Label>(value); }
+    bool is_func() { return std::holds_alternative<Func>(value); }
+    bool is_array() { return std::holds_alternative<Array>(value); }
+    
+    
+    
+    int64_t as_into_int()
+    {
+        if (is_int())
+            return as_int();
+        if (is_double())
+            return as_double();
+        throw std::runtime_error("Value is not of a numeric type");
+    }
+    
+    explicit operator bool() const
+    {
+        if (std::holds_alternative<int64_t>(value))
+            return !!std::get<int64_t>(value);
+        else if (std::holds_alternative<double>(value))
+            return !!std::get<double>(value);
+        return true;
+    }
+};
+
+TOKEN_LOG(stringval, vector<DynamicType>)
+TOKEN_LOG(stringref, shared_ptr<vector<DynamicType>>)
+
+void f_print_inner(DynamicType * val)
+{
+    if (val->is_ref())
+        return f_print_inner(val->as_ref().ref);
+    
+    if (val->is_int())
+        printf("%zd\n", val->as_int());
+    else if (val->is_double())
+        printf("%f\n", val->as_double());
+    else if (val->is_func())
+        puts("<function>");
+    else if (val->is_label())
+        puts("<label>");
+    else if (val->is_label())
+        puts("<label>");
+    else if (val->is_array())
+    {
+        printf("[");
+        auto & list = *val->as_array().items;
+        for (size_t i = 0; i < list.size(); i++)
+        {
+            if (i != 0)
+                printf(", ");
+            f_print_inner(&list[i]);
+        }
+        printf("]\n");
+    }
+    
+}
+void f_print(vector<DynamicType> & stack)
+{
+    auto v = stack.back();
+    stack.pop_back();
+    
+    f_print_inner(&v);
+}
+void f_printstr(vector<DynamicType> & stack)
+{
+    puts("in printstr");
+    
+    auto v = stack.back();
+    stack.pop_back();
+    
+    Array * a;
+    if (v.is_array())
+        a = &v.as_array();
+    else if (v.is_ref() && v.as_ref().ref->is_array())
+        a = &v.as_ref().ref->as_array();
+    else
+        return;
+    for (auto n : *a->items)
+    {
+        if (n.is_int())
+            printf("%c", (char)n.as_int());
+    }
+    puts("");
+}
+
+typedef void(*builtin_func)(vector<DynamicType> &);
+
+builtin_func builtins[] = {
+    f_print,
+    f_printstr,
+};
+
+int main(int argc, char ** argv) {
+    if (argc != 2)
+        return puts("Usage: ./flinch <filename>"), 0;
+
+    auto file = fopen(argv[1], "rb");
+    if (!file)
+        return printf("Failed to open file %s\n", argv[1]), 0;
+
+    fseek(file, 0, SEEK_END);
+    long int fsize = ftell(file);
+    rewind(file);
+
+    if (fsize < 0)
+        return printf("Failed to read from file %s\n", argv[1]), 0;
+    
+    string text;
+    text.resize(fsize);
+
+    size_t bytes_read = fread(text.data(), 1, fsize, file);
+    fclose(file);
+
+    if (bytes_read != (size_t)fsize)
+        return printf("Failed to read from file %s\n", argv[1]), 0;
+
+    size_t line = 0;
+    size_t i = 0, i2 = 0;
+
+    vector<string> program_texts;
+    vector<int> lines;
+    
+    
+    while (i < text.size())
+    {
+        while (i < text.size() && isspace(text[i]))
+        {
+            if (text[i] == '\n')
+                line++;
+            i++;
+        }
+
+        if (i < text.size() && text[i] == '#')
+        {
+            while (i < text.size() && text[i] != '\n')
+                i++;
+        }
+        else
+        {
+            i2 = i;
+            if (text[i2] == '"')
+            {
+                i2++;
+                string s = "\"";
+                while (i2 < text.size())
+                {
+                    if (text[i2] == '\\' && i2 + 1 < text.size())
+                    {
+                        if (text[i2+1] == 'n')
+                            s += '\n';
+                        else if (text[i2+1] == 'r')
+                            s += '\r';
+                        else if (text[i2+1] == 't')
+                            s += '\t';
+                        else if (text[i2+1] == '\\')
+                            s += '\\';
+                        else if (text[i2+1] == '\0')
+                            s += '\0';
+                        else if (text[i2+1] == 'x' && i2 + 3 < text.size())
+                        {
+                            char str[3] = {text[i2+2], text[i2+3], 0};
+                            char c = std::strtol(str, nullptr, 16);
+                            s += c;
+                        }
+                        else
+                            s += text[i2+1];
+                        i2 += 1;
+                    }
+                    else if (text[i2] == '"')
+                    {
+                        s += '"';
+                        break;
+                    }
+                    else
+                        s += text[i2];
+                    i2 += 1;
+                }
+                i2 += 1;
+                
+                bool isref = (text[i2] == '&');
+                if (isref)
+                {
+                    s += '&';
+                    i2 += 1;
+                }
+                
+                if (!isspace(text[i2]) && text[i2] != 0)
+                    throw runtime_error("String literals must not have trailing text after the closing \" character");
+                
+                program_texts.push_back(text.substr(i, i2 - i));
+                lines.push_back(line + 1);
+                i = i2;
+                continue;
+            }
+            while (i2 < text.size() && !isspace(text[i2]))
+                i2++;
+            program_texts.push_back(text.substr(i, i2 - i));
+            lines.push_back(line + 1);
+            i = i2;
+        }
+    }
+    
+    lines.push_back(lines.back());
+    
+    //for (auto & n : program_texts)
+    //    printf("%s\n", n.data());
+    
+    //for (auto & n : lines)
+    //    printf("%d\n", n);
+    //printf("(%d)\n", lines.size());
+    
+    auto isint = [&](const std::string& str) -> auto
+    {
+        if (str.empty())
+            return false;
+
+        bool has_sign = false;
+        if (str[0] == '+' || str[0] == '-')
+            has_sign = true;
+
+        for (size_t i = has_sign; i < str.length(); ++i)
+        {
+            if (!std::isdigit(str[i]))
+                return false;
+        }
+
+        return true;
+    };
+    auto isfloat = [&](const string& str) -> auto
+    {
+        try
+        {
+            stod(str);
+            return true;
+        }
+        catch (const invalid_argument&)
+        {
+            return false;
+        }
+        catch (const out_of_range&)
+        {
+            return false;
+        }
+    };
+    
+    auto isname = [&](const string& str) -> auto
+    {
+        if (str.empty())
+            return false;
+        if (!isalpha(str[0]) && str[0] != '_')
+            return false;
+        for (size_t i = 1; i < str.size(); ++i)
+        {
+            if (!isalnum(str[i]) && str[i] != '_')
+                return false;
+        }
+
+        return true;
+    };
+
+    get_token_func_num("");
+
+    vector<Token> program;
+    
+    vector<vector<string>> var_defs;
+    var_defs.push_back({});
+    
+    auto var_is_local = [&](string & s) -> auto
+    {
+        if (var_defs.size() == 1)
+            return false;
+        for (size_t i = 0; i < var_defs.back().size(); i++)
+        {
+            if (var_defs.back()[i] == s)
+                return true;
+        }
+        return false;
+    };
+    
+    auto var_is_global = [&](string & s) -> auto
+    {
+        for (size_t i = 0; i < var_defs[0].size(); i++)
+        {
+            if (var_defs[0][i] == s)
+                return true;
+        }
+        return false;
+    };
+    
+    for (i = 0; i < program_texts.size() && program_texts[i] != ""; ++i)
+    {
+        string token = program_texts[i];
+
+        if (token != "^^" && token.back() == '^' && token.size() >= 2)
+        {
+            var_defs.push_back({});
+            auto s = token.substr(0, token.size() - 1);
+            auto n = get_token_func_num(s);
+            program.push_back({FuncDec, n});
+        }
+        else if (token != "^^" && token.front() == '^' && token.size() >= 2)
+        {
+            auto s = token.substr(1);
+            auto n = get_token_func_num(s);
+            program.push_back({FuncLookup, n});
+        }
+        else if (token == "^^")
+        {
+            var_defs.pop_back();
+            program.push_back({FuncEnd, 0});
+        }
+        else if (token == "return")
+            program.push_back({Return, 0});
+        else if (token.front() == '$' && token.back() == '$' && token.size() >= 3)
+        {
+            auto s = token.substr(1, token.size() - 2);
+            auto n = get_token_varname_num(s);
+            var_defs.back().push_back(s);
+            if (var_defs.size() > 1)
+                program.push_back({LocalVarDecLookup, n});
+            else
+                program.push_back({GlobalVarDecLookup, n});
+        }
+        else if (token.back() == '$' && token.size() >= 2)
+        {
+            auto s = token.substr(0, token.size() - 1);
+            auto n = get_token_varname_num(s);
+            var_defs.back().push_back(s);
+            if (var_defs.size() > 1)
+                program.push_back({LocalVarDec, n});
+            else
+                program.push_back({GlobalVarDec, n});
+        }
+        else if (token.front() == '$' && token.size() >= 2)
+        {
+            auto s = token.substr(1);
+            auto n = get_token_varname_num(s);
+            if (var_is_local(s))
+                program.push_back({LocalVarLookup, n});
+            else if (var_is_global(s))
+                program.push_back({GlobalVarLookup, n});
+            else
+                return fprintf(stderr, "undefined variable %s on line %d\n", s.data(), lines[i]), 1;
+        }
+        else if (token.front() == ':' && token.size() >= 2)
+        {
+            auto s = token.substr(1);
+            auto n = get_token_string_num(s);
+            //printf("in LabelLookup found number %d for label %s\n", n, s.data());
+            program.push_back({LabelLookup, n});
+        }
+        else if (token.back() == ':' && token.size() >= 2)
+        {
+            auto s = token.substr(0, token.size() - 1);
+            auto n = get_token_string_num(s);
+            //printf("in LabelDec found number %d for label %s\n", n, s.data());
+            program.push_back({LabelDec, n});
+        }
+        else if (token == "call")
+            program.push_back({Call, 0});
+        else if (token == "call_eval")
+            program.push_back({CallEval, 0});
+        else if (token == "if_goto")
+            program.push_back({IfGoto, 0});
+        else if (token == "goto")
+            program.push_back({Goto, 0});
+        
+        else if (token == "<-")
+            program.push_back({Assign, 0});
+        
+        else if (token == "[")
+            program.push_back({ScopeOpen, 0});
+        else if (token == "]~")
+            program.push_back({ScopeClose, 0});
+        
+        else if (token == "+")
+            program.push_back({Add, 0});
+        else if (token == "-")
+            program.push_back({Sub, 0});
+        else if (token == "*")
+            program.push_back({Mul, 0});
+        else if (token == "/")
+            program.push_back({Div, 0});
+        else if (token == "%")
+            program.push_back({Mod, 0});
+        
+        else if (token == "+=")
+            program.push_back({AddAssign, 0});
+        else if (token == "-=")
+            program.push_back({SubAssign, 0});
+        else if (token == "*=")
+            program.push_back({MulAssign, 0});
+        else if (token == "/=")
+            program.push_back({DivAssign, 0});
+        else if (token == "%=")
+            program.push_back({ModAssign, 0});
+        
+        else if (token == "==")
+            program.push_back({CmpEQ, 0});
+        else if (token == "!=")
+            program.push_back({CmpNE, 0});
+        else if (token == "<=")
+            program.push_back({CmpLE, 0});
+        else if (token == ">=")
+            program.push_back({CmpGE, 0});
+        else if (token == "<")
+            program.push_back({CmpLT, 0});
+        else if (token == ">")
+            program.push_back({CmpGT, 0});
+        
+        else if (token == "]")
+            program.push_back({ArrayBuild, 0});
+        else if (token == "@")
+            program.push_back({ArrayIndex, 0});
+        else if (token == "::")
+            program.push_back({Clone, 0});
+        //else if (token == "::!")
+        //    program.push_back({CloneDeep, 0});
+        
+        else if (token == "@?")
+            program.push_back({ArrayLen, 0});
+        else if (token == "@?-")
+            program.push_back({ArrayLenMinusOne, 0});
+        else if (token == "@+")
+            program.push_back({ArrayPushIn, 0});
+        else if (token == "@-")
+            program.push_back({ArrayPopOut, 0});
+        
+        else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
+        {
+            std::vector<DynamicType> str = {};
+            for (size_t i = 1; i < token.size() - 1; i++)
+                str.push_back((int64_t)token[i]);
+            auto n = get_token_stringval_num(std::move(str));
+            program.push_back({StringLiteral, n});
+        }
+        else if (token.size() >= 3 && token[0] == '"' && token.back() == '&')
+        {
+            auto str = make_shared<std::vector<DynamicType>>();
+            for (size_t i = 1; i < token.size() - 2; i++)
+                str->push_back((int64_t)token[i]);
+            auto n = get_token_stringref_num(str);
+            program.push_back({StringLitReference, n});
+        }
+        else if (token.size() >= 2 && token[0] == '!')
+        {
+            auto s = token.substr(1);
+            if (s == "print")
+                program.push_back({BuiltinCall, 0});
+            else if (s == "printstr")
+                program.push_back({BuiltinCall, 1});
+            else
+                throw runtime_error("Unknown built-in function: " + token);
+        }
+        else
+        {
+            if (isint(token))
+            {
+                int64_t num = stoll(token);
+                int64_t num2_smol = num / 10000;
+                int64_t num2 = num2_smol * 10000;
+                int64_t num3_smol = num >> 15;
+                int64_t num3 = num3_smol << 15;
+                if (num >= -32768 && num <= 32767)
+                    program.push_back({IntegerInline, (iword_t)num});
+                else if (num2 == num && num2_smol >= -32768 && num2_smol <= 32767)
+                    program.push_back({IntegerInlineBigDec, (iword_t)num2_smol});
+                else if (num3 == num && num3_smol >= -32768 && num3_smol <= 32767)
+                    program.push_back({IntegerInlineBigBin, (iword_t)num3_smol});
+                else
+                {
+                    auto n = get_token_int_num(num);
+                    program.push_back({Integer, n});
+                }
+            }
+            else if (isfloat(token))
+            {
+                auto d = stod(token);
+                
+                uint64_t dec;
+                memcpy(&dec, &d, sizeof(d));
+                const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
+                
+                if ((dec >> x) << x == dec)
+                    program.push_back({DoubleInline, (iword_t)(dec >> x)});
+                else
+                {
+                    auto n = get_token_double_num(d);
+                    program.push_back({Double, n});
+                }
+            }
+            else if (isname(token))
+            {
+                auto n = get_token_varname_num(token);
+                if (var_is_local(token))
+                    program.push_back({LocalVar, n});
+                else if (var_is_global(token))
+                    program.push_back({GlobalVar, n});
+                else
+                    return fprintf(stderr, "undefined variable %s on line %d\n", token.data(), lines[i]), 1;
+            }
+            else
+                throw runtime_error("Invalid token: " + token);
+        }
+    }
+    program.push_back({Exit, 0});
+
+    auto still_valid = [&]() { return i > 0 && i < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; };
+
+    // peephole optimizer!
+    for (i = 0; i < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; ++i)
+    {
+        if (still_valid() && program[i].kind == LocalVarLookup && program[i+1].kind == Assign)
+        {
+            program[i].kind = AssignVar;
+            program.erase(program.begin() + i + 1);
+            lines.erase(lines.begin() + i + 1);
+            i -= 1;
+        }
+        if (still_valid() && program[i].kind == LocalVarLookup && program[i+1].kind == Assign)
+        {
+            program[i].kind = AssignVar;
+            program.erase(program.begin() + i + 1);
+            lines.erase(lines.begin() + i + 1);
+            i -= 1;
+        }
+        if (still_valid() && program[i].kind == LabelLookup && program[i+1].kind == Goto)
+        {
+            program[i].kind = GotoLabel;
+            program.erase(program.begin() + i + 1);
+            lines.erase(lines.begin() + i + 1);
+            i -= 1;
+        }
+        if (still_valid() && program[i].kind == LabelLookup && program[i+1].kind == IfGoto)
+        {
+            program[i].kind = IfGotoLabel;
+            program.erase(program.begin() + i + 1);
+            lines.erase(lines.begin() + i + 1);
+            i -= 1;
+        }
+        if (still_valid() && program[i].kind >= CmpEQ && program[i].kind <= CmpGT && program[i+1].kind == IfGotoLabel)
+        {
+            program[i].kind = TKind(IfGotoLabelEQ + (program[i].kind - CmpEQ));
+            program[i].n = program[i+1].n;
+            program.erase(program.begin() + i + 1);
+            lines.erase(lines.begin() + i + 1);
+            i -= 1;
+        }
+    }
+
+    // rewrite root-level labels, identify root-level variables
+    vector<iword_t> root_labels;
+    while (root_labels.size() < token_strings.size())
+        root_labels.push_back({(iword_t)-1});
+    
+    for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
+    {
+        auto token = program[i];
+        if (token.kind == FuncDec)
+        {
+            while (program[i++].kind != FuncEnd) { }
+        }
+        if (program[i].kind == LabelDec)
+        {
+            root_labels[program[i].n] = (iword_t)i;
+            program.erase(program.begin() + i);
+            i -= 1;
+        }
+    }
+    for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
+    {
+        auto token = program[i];
+        if (token.kind == FuncDec)
+        {
+            while (program[i++].kind != FuncEnd) { }
+        }
+        if (program[i].kind == LabelLookup ||
+            program[i].kind == GotoLabel ||
+            (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
+        {
+            program[i].n = root_labels[program[i].n];
+            assert(program[i].n != (iword_t)-1);
+        }
+    }
+    
+    vector<Func> funcs;
+    while (funcs.size() < token_funcs.size())
+        funcs.push_back(Func{0,0,0});
+    
+    // rewrite in-function labels, register functions
+    for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
+    {
+        auto token = program[i];
+        
+        if (token.kind == FuncDec)
+        {
+            auto n = token.n;
+            assert(funcs[n].name == 0);
+            
+            vector<iword_t> labels;
+            
+            while (labels.size() < token_strings.size())
+                labels.push_back({(iword_t)-1});
+            
+            for (int i2 = i + 1; program[i2].kind != FuncEnd; i2 += 1)
+            {
+                if (program[i2].kind == LabelDec)
+                {
+                    labels[program[i2].n] = (iword_t)i2;
+                    program.erase(program.begin() + i2);
+                    i2 -= 1;
+                }
+            }
+            unsigned int start = i;
+            unsigned int i2 = i + 1;
+            for (; program[i2].kind != FuncEnd; i2 += 1)
+            {
+                if (program[i2].kind == LabelLookup ||
+                    program[i2].kind == GotoLabel ||
+                    (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
+                {
+                    program[i2].n = labels[program[i2].n];
+                    assert(program[i2].n != (iword_t)-1);
+                }
+            }
+            funcs[n] = Func{start + 1, i2 - start, n};
+        }
+    }
+    
+    vector<DynamicType> vars_default;
+    for (size_t i = 0; i < token_varnames.size(); i++)
+        vars_default.push_back(0);
+    
+    vector<pair<iword_t, bool>> callstack;
+    vector<iword_t> fstack;
+    vector<DynamicType> globals = vars_default;
+    vector<vector<DynamicType>> varstack;
+    vector<vector<DynamicType>> evalstack;
+
+    fstack.push_back(0);
+    evalstack.push_back({});
+
+    auto valpush = [&](DynamicType x) -> auto {
+        evalstack.back().push_back(x);
+        return x;
+    };
+
+    auto valpop = [&]() -> auto {
+        assert(!evalstack.back().empty());
+        auto val = evalstack.back().back();
+        evalstack.back().pop_back();
+        return val;
+    };
+
+    auto push_sentinel = [&]() -> auto {
+        evalstack.push_back({});
+    };
+
+    auto pop_sentinel = [&]() -> auto {
+        assert(evalstack.size() > 1);
+        evalstack.pop_back();
+    };
+
+    try
+    {
+        printf("size: %d\n", (int)program.size());
+        
+        #ifdef INTERPRETER_USE_LOOP
+        
+        #define INTERPRETER_NEXT()
+        #define INTERPRETER_DEF()\
+            int i = 0;\
+            while (1)\
+            {\
+                auto n = program[i].n;\
+                switch (program[i].kind)\
+                {
+        #define INTERPRETER_CASE(NAME)\
+            case NAME:\
+            i += 1;\
+            {
+        #define INTERPRETER_ENDCASE()\
+            } break;
+        #define INTERPRETER_ENDDEF()\
+            default: assert(0);\
+            } }
+
+        #else // of ifdef INTERPRETER_USE_LOOP
+        
+        int i = 0;
+        
+        static void * handlers[] = {
+            &&HandlerGlobalVar,
+            &&HandlerGlobalVarDec,
+            &&HandlerGlobalVarLookup,
+            &&HandlerGlobalVarDecLookup,
+            
+            &&HandlerLocalVar,
+            &&HandlerLocalVarDec,
+            &&HandlerLocalVarLookup,
+            &&HandlerLocalVarDecLookup,
+            
+            &&HandlerFuncDec,
+            &&HandlerFuncLookup,
+            &&HandlerFuncEnd,
+            
+            &&HandlerLabelDec,
+            &&HandlerLabelLookup,
+            
+            &&HandlerInteger,
+            &&HandlerIntegerInline,
+            &&HandlerIntegerInlineBigDec,
+            &&HandlerIntegerInlineBigBin,
+            &&HandlerDouble,
+            &&HandlerDoubleInline,
+            
+            &&HandlerAdd,
+            &&HandlerSub,
+            &&HandlerMul,
+            &&HandlerDiv,
+            &&HandlerMod,
+            
+            &&HandlerAddAssign,
+            &&HandlerSubAssign,
+            &&HandlerMulAssign,
+            &&HandlerDivAssign,
+            &&HandlerModAssign,
+            
+            &&HandlerAssign,
+            &&HandlerAssignVar,
+            &&HandlerReturn,
+            &&HandlerCall,
+            &&HandlerCallEval,
+            
+            &&HandlerIfGoto,
+            &&HandlerIfGotoLabel,
+            
+            &&HandlerIfGotoLabelEQ,
+            &&HandlerIfGotoLabelNE,
+            &&HandlerIfGotoLabelLE,
+            &&HandlerIfGotoLabelGE,
+            &&HandlerIfGotoLabelLT,
+            &&HandlerIfGotoLabelGT,
+            
+            &&HandlerGoto,
+            &&HandlerGotoLabel,
+            
+            &&HandlerScopeOpen,
+            &&HandlerScopeClose,
+            
+            &&HandlerCmpEQ,
+            &&HandlerCmpNE,
+            &&HandlerCmpLE,
+            &&HandlerCmpGE,
+            &&HandlerCmpLT,
+            &&HandlerCmpGT,
+            
+            &&HandlerArrayBuild,
+            &&HandlerArrayIndex,
+            &&HandlerClone,
+            //&&HandlerCloneDeep,
+            
+            &&HandlerArrayLen,
+            &&HandlerArrayLenMinusOne,
+            &&HandlerArrayPushIn,
+            &&HandlerArrayPopOut,
+            
+            &&HandlerStringLiteral,
+            &&HandlerStringLitReference,
+            
+            &&HandlerBuiltinCall,
+            
+            &&HandlerExit,
+        };
+
+        #define INTERPRETER_NEXT()\
+            goto *handlers[program[i].kind];
+        
+        #define INTERPRETER_DEF()\
+            goto AFTERDEFS;
+        
+        #define INTERPRETER_CASE(NAME)\
+            { Handler##NAME : { \
+            auto n = program[i].n; (void)n;\
+            i += 1;
+            //printf("at %d in %s\n", i - 1, #NAME);
+        
+        #define INTERPRETER_ENDCASE()\
+            } INTERPRETER_NEXT() }
+        
+        #define INTERPRETER_ENDDEF()\
+            if (false) { AFTERDEFS: { INTERPRETER_NEXT() } }
+
+        #endif // else of ifdef INTERPRETER_USE_LOOP
+        
+        INTERPRETER_DEF()
+        
+        INTERPRETER_CASE(FuncDec)
+            i += funcs[n].len;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(FuncLookup)
+            valpush(funcs[n]);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(FuncEnd)
+            varstack.pop_back();
+            i = callstack.back().first;
+            bool is_eval = callstack.back().second;
+            callstack.pop_back();
+            if (is_eval)
+                valpush(0); // functions return 0 by default
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(Return)
+            auto val = valpop();
+            varstack.pop_back();
+            i = callstack.back().first;
+            bool is_eval = callstack.back().second;
+            callstack.pop_back();
+            if (is_eval)
+                valpush(val);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(LocalVarDec)
+            varstack.back()[n] = 0;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(LocalVarLookup)
+            valpush(Ref{&varstack.back()[n]});
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(LocalVarDecLookup)
+            varstack.back()[n] = 0;
+            valpush(Ref{&varstack.back()[n]});
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(GlobalVarDec)
+            globals[n] = 0;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(GlobalVarLookup)
+            valpush(Ref{&globals[n]});
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(GlobalVarDecLookup)
+            globals[n] = 0;
+            valpush(Ref{&globals[n]});
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(LabelLookup)
+            valpush(Label{(int)n});
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(LabelDec)
+            assert(0);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(Call)
+            Func f = valpop().as_func();
+            callstack.push_back({i, 0});
+            fstack.push_back(f.name);
+            varstack.push_back(vars_default);
+            i = f.loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(CallEval)
+            Func f = valpop().as_func();
+            callstack.push_back({i, 1});
+            fstack.push_back(f.name);
+            varstack.push_back(vars_default);
+            i = f.loc;
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(Assign)
+            Ref ref = valpop().as_ref();
+            auto val = valpop();
+            (*ref.ref) = val;
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(AssignVar)
+            auto val = valpop();
+            varstack.back()[n] = val;
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ScopeOpen)
+            push_sentinel();
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(ScopeClose)
+            pop_sentinel();
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(IfGoto)
+            Label dest = valpop().as_label();
+            auto val = valpop();
+            if (val)
+                i = dest.loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabel)
+            auto loc = n;
+            auto val = valpop();
+            if (val)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabelEQ)
+            auto loc = n;
+            auto val2 = valpop();
+            auto val1 = valpop();
+            if (val1 == val2)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabelNE)
+            auto loc = n;
+            auto val2 = valpop();
+            auto val1 = valpop();
+            if (val1 != val2)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabelLE)
+            auto loc = n;
+            auto val2 = valpop();
+            auto val1 = valpop();
+            if (val1 <= val2)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabelGE)
+            auto loc = n;
+            auto val2 = valpop();
+            auto val1 = valpop();
+            if (val1 >= val2)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabelLT)
+            auto loc = n;
+            auto val2 = valpop();
+            auto val1 = valpop();
+            if (val1 < val2)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IfGotoLabelGT)
+            auto loc = n;
+            auto val2 = valpop();
+            auto val1 = valpop();
+            if (val1 > val2)
+                i = loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(Goto)
+            Label dest = valpop().as_label();
+            i = dest.loc;
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(GotoLabel)
+            i = n;
+            INTERPRETER_ENDCASE()
+        
+        #define UNARY_SIMPLE(NAME, OP) \
+        INTERPRETER_CASE(NAME)\
+            auto b = valpop();\
+            auto a = valpop();\
+            valpush(a OP b);\
+            INTERPRETER_ENDCASE()
+        
+        #define UNARY_ASSIGN(NAME, OP) \
+        INTERPRETER_CASE(NAME)\
+            Ref ref = valpop().as_ref();\
+            auto a = valpop();\
+            auto & v = (*ref.ref);\
+            v = v OP a;\
+            INTERPRETER_ENDCASE()
+        
+        UNARY_SIMPLE(Add, +)
+        UNARY_SIMPLE(Sub, -)
+        UNARY_SIMPLE(Mul, *)
+        UNARY_SIMPLE(Div, /)
+        UNARY_SIMPLE(Mod, %)
+        
+        UNARY_ASSIGN(AddAssign, +)
+        UNARY_ASSIGN(SubAssign, -)
+        UNARY_ASSIGN(MulAssign, *)
+        UNARY_ASSIGN(DivAssign, /)
+        UNARY_ASSIGN(ModAssign, %)
+        
+        UNARY_SIMPLE(CmpEQ, ==)
+        UNARY_SIMPLE(CmpNE, !=)
+        UNARY_SIMPLE(CmpLE, <=)
+        UNARY_SIMPLE(CmpGE, >=)
+        UNARY_SIMPLE(CmpLT, <)
+        UNARY_SIMPLE(CmpGT, >)
+        
+        INTERPRETER_CASE(IntegerInline)
+            valpush((int64_t)(int16_t)n);
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IntegerInlineBigDec)
+            valpush(((int64_t)(int16_t)n)*10000);
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(IntegerInlineBigBin)
+            valpush(((int64_t)(int16_t)n)<<15);
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(Integer)
+            valpush((int64_t)get_token_int(n));
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(DoubleInline)
+            const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
+            uint64_t dec = n;
+            dec <<= x;
+            double d;
+            memcpy(&d, &dec, sizeof(dec));
+            valpush(d);
+            INTERPRETER_ENDCASE()
+        INTERPRETER_CASE(Double)
+            valpush(get_token_double(n));
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(LocalVar)
+            valpush(varstack.back()[n]);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(GlobalVar)
+            valpush(globals[n]);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ArrayBuild)
+            auto back = std::move(evalstack.back());
+            evalstack.pop_back();
+            valpush(Array{std::make_shared<vector<DynamicType>>(std::move(back))});
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ArrayIndex)
+            auto i = valpop().as_into_int();
+            auto a = valpop();
+            if (a.is_array())
+            {
+                auto v = (*a.as_array().items)[i];
+                valpush(v);
+            }
+            else if (a.is_ref() && a.as_ref().ref->is_array())
+            {
+                auto * a2 = &a.as_ref().ref->as_array();
+                auto * v = &(*a2->items)[i]; // FIXME holding on to pointers into the inside of arrays is extremely unsafe
+                valpush({Ref{v}});
+            }
+            else
+                throw std::runtime_error("Tried to index into a non-array value");
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(Clone)
+            auto v = valpop();
+            if (v.is_ref())
+                v = *v.as_ref().ref;
+            valpush(v);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ArrayLen)
+            auto a = valpop();
+            if (a.is_array())
+                valpush((int64_t)a.as_array().items->size());
+            else if (a.is_ref() && a.as_ref().ref->is_array())
+                valpush((int64_t)a.as_ref().ref->as_array().items->size());
+            else
+                throw std::runtime_error("Tried to get length of a non-array value");
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ArrayLenMinusOne)
+            auto a = valpop();
+            if (a.is_array())
+                valpush((int64_t)a.as_array().items->size() - 1);
+            else if (a.is_ref() && a.as_ref().ref->is_array())
+                valpush((int64_t)a.as_ref().ref->as_array().items->size() - 1);
+            else
+                throw std::runtime_error("Tried to get length of a non-array value");
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ArrayPopOut)
+            auto i = valpop().as_into_int();
+            auto v = valpop();
+            Array * a;
+            if (v.is_array())
+                a = &v.as_array();
+            else if (v.is_ref() && v.as_ref().ref->is_array())
+                a = &v.as_ref().ref->as_array();
+            else
+                throw std::runtime_error("Tried to index into a non-array value");
+            auto ret = (*a->items)[i];
+            a->items->erase(a->items->begin() + i);
+            valpush(ret);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(ArrayPushIn)
+            auto inval = valpop();
+            auto i = valpop().as_into_int();
+            auto v = valpop();
+            Array * a;
+            if (v.is_array())
+                a = &v.as_array();
+            else if (v.is_ref() && v.as_ref().ref->is_array())
+                a = &v.as_ref().ref->as_array();
+            else
+                throw std::runtime_error("Tried to index into a non-array value");
+            auto ret = (*a->items)[i];
+            a->items->insert(a->items->begin() + i, inval);
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(StringLiteral)
+            valpush(Array{std::make_shared<vector<DynamicType>>(get_token_stringval(n))});
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(StringLitReference)
+            valpush(Array{get_token_stringref(n)});
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(BuiltinCall)
+            builtins[n](evalstack.back());
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_CASE(Exit)
+            goto INTERPRETER_EXIT;
+            INTERPRETER_ENDCASE()
+        
+        INTERPRETER_ENDDEF()
+
+        INTERPRETER_EXIT:
+        
+        //printf("done! (token %d)\n", i);
+        printf("done!\n");
+        for (auto val : evalstack.back())
+            printf("%.17g ", (val.is_int() ? val.as_int() : val.is_double() ? val.as_double() : (0.0/0.0)));
+        puts("");
+    }
+    catch (const exception& e)
+    {
+        printf("(token %zd)\n", i);
+        cerr << "Error on line " << lines[i] << ": " << e.what() << endl;
+        return 1;
+    }
+
+    return 0;
+}

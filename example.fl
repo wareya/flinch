@@ -1,0 +1,48 @@
+
+# symbol on right edge of name: some kind of definition/declaration
+# symbol on left edge: some kind of location lookup 
+# bare name: variable value lookup
+
+# start definition of function f
+f^
+    # x$ # declares variable x without pushing its location to the stack
+    $x$  # declare function-scoped variable x and pushes its location to the stack
+    <-   # pops the location of x, then pops a value, which is the first func arg, and assigns it into x
+    x !print
+    
+    [ # opens a new evaluation stack (to protect us from badly-written functions)
+    x ^f2 call_eval # call f2 with argument x and evaluate return value onto stack
+    # using "call" instead would not evaluate return value onto stack
+    $x <- # assign call return value on stack into x
+    ]~ # closes the new evaluation stack
+    
+    y$
+    
+    x !print
+    "Hello, world!"& !printstr # strings ending with & are reference strings and can be mutated. strings that don't are value strings but are more expensive to evaluate.
+    
+    # :yes is label lookup
+    # (either looks at most recent definition of "yes:", or looks for next definition of "yes:")
+    x :yes if_goto
+    y :yes2 if_goto
+    :no goto
+    
+    yes:
+        17 return
+    yes2:
+        :out goto
+    no:
+        659 return
+    
+    
+    out:
+    # functions return 0 by default
+^^ # end of function
+
+
+f2^
+
+^^
+
+14 ^f call_eval
+

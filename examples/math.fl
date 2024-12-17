@@ -1,7 +1,7 @@
-52334.59 34923.62 ^ !print # bitwise operators coerce 
-3 2 / !print
+52334.59 34923.62 ^ !print # bitwise operators coerce to int
+3 2 / !print # division over integers is integer division
 3.0 2.0 / !print
-0.0 0.0 / !print
+0.0 0.0 / !print # float division by 0 is valid
 1.0 0.0 / !print
 -1.0 0.0 / !print
 

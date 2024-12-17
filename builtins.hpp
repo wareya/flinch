@@ -1,6 +1,8 @@
 
 // built-in function definitions. customize however you want!
-
+// also search for:
+// ->>> BUILTINS <<<-
+// in flinch.cpp and modify the if-else chain appropriately
 
 void f_print_inner(DynamicType * val, const char * eol = "\n")
 {
@@ -10,7 +12,7 @@ void f_print_inner(DynamicType * val, const char * eol = "\n")
     if (val->is_int())
         printf("%zd%s", val->as_int(), eol);
     else if (val->is_double())
-        printf("%f%s", val->as_double(), eol);
+        printf("%.17g%s", val->as_double(), eol);
     else if (val->is_func())
         puts("<function>");
     else if (val->is_label())

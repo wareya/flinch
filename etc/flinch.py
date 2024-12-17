@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# old prototype flinch interpreter that doesn't run current flinch code: historical observation only
+
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as f:

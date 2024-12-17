@@ -19,3 +19,4 @@ loopend: $b @? 0 > :loopstart if_goto
 
 $a !print
 $b !print
+

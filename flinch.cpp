@@ -67,6 +67,10 @@ enum TKind : iword_t {
     And,
     Or,
     Xor,
+    
+    Shl,
+    Shr,
+    
     BoolAnd,
     BoolOr,
     
@@ -203,6 +207,9 @@ struct DynamicType {
     bool operator!=(const DynamicType& other) const { INFIX(!!, !!, !=, !=, ) }
     bool operator>(const DynamicType& other) const { INFIX(!!, !!, >, >, ) }
     bool operator<(const DynamicType& other) const { INFIX(!!, !!, <, <, ) }
+    
+    DynamicType operator<<(const DynamicType& other) const { INFIX(int64_t, int64_t, <<, <<, int64_t) }
+    DynamicType operator>>(const DynamicType& other) const { INFIX(int64_t, int64_t, >>, >>, int64_t) }
     
     DynamicType operator&(const DynamicType& other) const { INFIX(int64_t, int64_t, &, &, uint64_t) }
     DynamicType operator|(const DynamicType& other) const { INFIX(int64_t, int64_t, |, |, uint64_t) }
@@ -451,6 +458,9 @@ Program load_program(string text)
     trivial_ops.insert({"&", And});
     trivial_ops.insert({"|", Or});
     trivial_ops.insert({"^", Xor});
+    trivial_ops.insert({"<<", Shl});
+    trivial_ops.insert({">>", Shr});
+    
     trivial_ops.insert({"and", BoolAnd});
     trivial_ops.insert({"or", BoolOr});
     
@@ -587,10 +597,7 @@ Program load_program(string text)
                 else if (num3 == num && num3_smol >= -32768 && num3_smol <= 32767)
                     program.push_back({IntegerInlineBigBin, (iword_t)num3_smol});
                 else
-                {
-                    auto n = get_token_int_num(num);
-                    program.push_back({Integer, n});
-                }
+                    program.push_back({Integer, get_token_int_num(num)});
             }
             else if (isfloat(token))
             {
@@ -603,10 +610,7 @@ Program load_program(string text)
                 if ((dec >> x) << x == dec)
                     program.push_back({DoubleInline, (iword_t)(dec >> x)});
                 else
-                {
-                    auto n = get_token_double_num(d);
-                    program.push_back({Double, n});
-                }
+                    program.push_back({Double, get_token_double_num(d)});
             }
             else if (isname(token))
             {
@@ -821,6 +825,10 @@ int interpret(const Program & programdata)
             &&HandlerAnd,
             &&HandlerOr,
             &&HandlerXor,
+            
+            &&HandlerShl,
+            &&HandlerShr,
+            
             &&HandlerBoolAnd,
             &&HandlerBoolOr,
             
@@ -1016,6 +1024,9 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Xor, ^)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(BoolAnd, &&)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(BoolOr, ||)
+        
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(Shl, <<)
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(Shr, >>)
         
         INTERPRETER_MIDCASE_UNARY_ASSIGN(AddAssign, +)
         INTERPRETER_MIDCASE_UNARY_ASSIGN(SubAssign, -)

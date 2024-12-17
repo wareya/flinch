@@ -1,0 +1,11 @@
+52334.59 34923.62 ^ !print # bitwise operators coerce 
+3 2 / !print
+3.0 2.0 / !print
+0.0 0.0 / !print
+1.0 0.0 / !print
+-1.0 0.0 / !print
+
+-15023 3 << !print
+-15023 2 >> !print
+-15023 63 >> !print # right-shift is SAR, not SHR
+

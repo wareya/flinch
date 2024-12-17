@@ -64,6 +64,12 @@ enum TKind : iword_t {
     DivAssign,
     ModAssign,
     
+    And,
+    Or,
+    Xor,
+    BoolAnd,
+    BoolOr,
+    
     Assign,
     AssignVar,
     Return,
@@ -172,32 +178,38 @@ struct DynamicType {
     DynamicType& operator=(const DynamicType& other) = default;
     DynamicType& operator=(DynamicType&& other) noexcept = default;
     
-    #define INFIX(WRAPPER1, WRAPPER2, OP, OP2)\
+    #define INFIX(WRAPPER1, WRAPPER2, OP, OP2, WX)\
         if (std::holds_alternative<int64_t>(value) && std::holds_alternative<int64_t>(other.value))\
-            return WRAPPER1(std::get<int64_t>(value) OP std::get<int64_t>(other.value));\
+            return WRAPPER1(WX(std::get<int64_t>(value)) OP WX(std::get<int64_t>(other.value)));\
         else if (std::holds_alternative<double>(value) && std::holds_alternative<double>(other.value))\
-            return WRAPPER2(std::get<double>(value) OP2 std::get<double>(other.value));\
+            return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<double>(other.value)));\
         else if (std::holds_alternative<int64_t>(value) && std::holds_alternative<double>(other.value))\
-            return WRAPPER2(std::get<int64_t>(value) OP2 std::get<double>(other.value));\
+            return WRAPPER2(WX(std::get<int64_t>(value)) OP2 WX(std::get<double>(other.value)));\
         else if (std::holds_alternative<double>(value) && std::holds_alternative<int64_t>(other.value))\
-            return WRAPPER2(std::get<double>(value) OP2 std::get<int64_t>(other.value));\
+            return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<int64_t>(other.value)));\
         throw std::runtime_error("Unsupported operation: non-numeric operands");
     
     #define COMMA ,
     
-    DynamicType operator+(const DynamicType& other) const { INFIX(DynamicType, DynamicType, +, +) }
-    DynamicType operator-(const DynamicType& other) const { INFIX(DynamicType, DynamicType, -, -) }
-    DynamicType operator*(const DynamicType& other) const { INFIX(DynamicType, DynamicType, *, *) }
-    DynamicType operator/(const DynamicType& other) const { INFIX(DynamicType, DynamicType, /, /) }
-    DynamicType operator%(const DynamicType& other) const { INFIX(DynamicType, fmod, %, COMMA) }
+    DynamicType operator+(const DynamicType& other) const { INFIX(DynamicType, DynamicType, +, +, ) }
+    DynamicType operator-(const DynamicType& other) const { INFIX(DynamicType, DynamicType, -, -, ) }
+    DynamicType operator*(const DynamicType& other) const { INFIX(DynamicType, DynamicType, *, *, ) }
+    DynamicType operator/(const DynamicType& other) const { INFIX(DynamicType, DynamicType, /, /, ) }
+    DynamicType operator%(const DynamicType& other) const { INFIX(DynamicType, fmod, %, COMMA, ) }
     
-    bool operator>=(const DynamicType& other) const { INFIX(!!, !!, >=, >=) }
-    bool operator<=(const DynamicType& other) const { INFIX(!!, !!, <=, <=) }
-    bool operator==(const DynamicType& other) const { INFIX(!!, !!, ==, ==) }
-    bool operator!=(const DynamicType& other) const { INFIX(!!, !!, !=, !=) }
-    bool operator>(const DynamicType& other) const { INFIX(!!, !!, >, >) }
-    bool operator<(const DynamicType& other) const { INFIX(!!, !!, <, <) }
+    bool operator>=(const DynamicType& other) const { INFIX(!!, !!, >=, >=, ) }
+    bool operator<=(const DynamicType& other) const { INFIX(!!, !!, <=, <=, ) }
+    bool operator==(const DynamicType& other) const { INFIX(!!, !!, ==, ==, ) }
+    bool operator!=(const DynamicType& other) const { INFIX(!!, !!, !=, !=, ) }
+    bool operator>(const DynamicType& other) const { INFIX(!!, !!, >, >, ) }
+    bool operator<(const DynamicType& other) const { INFIX(!!, !!, <, <, ) }
     
+    DynamicType operator&(const DynamicType& other) const { INFIX(int64_t, int64_t, &, &, uint64_t) }
+    DynamicType operator|(const DynamicType& other) const { INFIX(int64_t, int64_t, |, |, uint64_t) }
+    DynamicType operator^(const DynamicType& other) const { INFIX(int64_t, int64_t, ^, ^, uint64_t) }
+    
+    bool operator&&(const DynamicType& other) const { INFIX(!!, !!, &&, &&, ) }
+    bool operator||(const DynamicType& other) const { INFIX(!!, !!, ||, ||, ) }
     
     #define AS_TYPE_X(TYPE, TYPENAME)\
     TYPE & as_##TYPENAME()\
@@ -240,36 +252,6 @@ struct DynamicType {
 
 TOKEN_LOG(stringval, vector<DynamicType>)
 TOKEN_LOG(stringref, shared_ptr<vector<DynamicType>>)
-
-void f_print_inner(DynamicType * val)
-{
-    if (val->is_ref())
-        return f_print_inner(val->as_ref().ref);
-    
-    if (val->is_int())
-        printf("%zd\n", val->as_int());
-    else if (val->is_double())
-        printf("%f\n", val->as_double());
-    else if (val->is_func())
-        puts("<function>");
-    else if (val->is_label())
-        puts("<label>");
-    else if (val->is_label())
-        puts("<label>");
-    else if (val->is_array())
-    {
-        printf("[");
-        auto & list = *val->as_array().items;
-        for (size_t i = 0; i < list.size(); i++)
-        {
-            if (i != 0)
-                printf(", ");
-            f_print_inner(&list[i]);
-        }
-        printf("]\n");
-    }
-    
-}
 
 // built-in function definitions. must be specifically here. do not move.
 #include "builtins.hpp"
@@ -465,7 +447,13 @@ Program load_program(string text)
     trivial_ops.insert({"*=", MulAssign});
     trivial_ops.insert({"/=", DivAssign});
     trivial_ops.insert({"%=", ModAssign});
-        
+    
+    trivial_ops.insert({"&", And});
+    trivial_ops.insert({"|", Or});
+    trivial_ops.insert({"^", Xor});
+    trivial_ops.insert({"and", BoolAnd});
+    trivial_ops.insert({"or", BoolOr});
+    
     trivial_ops.insert({"==", CmpEQ});
     trivial_ops.insert({"!=", CmpNE});
     trivial_ops.insert({"<=", CmpLE});
@@ -779,8 +767,6 @@ int interpret(const Program & programdata)
     int i = 0;
     try
     {
-        printf("size: %d\n", (int)program.size());
-        
         #ifdef INTERPRETER_USE_LOOP
         
         #define INTERPRETER_NEXT()
@@ -831,6 +817,12 @@ int interpret(const Program & programdata)
             &&HandlerMulAssign,
             &&HandlerDivAssign,
             &&HandlerModAssign,
+            
+            &&HandlerAnd,
+            &&HandlerOr,
+            &&HandlerXor,
+            &&HandlerBoolAnd,
+            &&HandlerBoolOr,
             
             &&HandlerAssign,
             &&HandlerAssignVar,
@@ -1018,6 +1010,12 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Mul, *)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Div, /)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Mod, %)
+        
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(And, &)
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(Or,  |)
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(Xor, ^)
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(BoolAnd, &&)
+        INTERPRETER_MIDCASE_UNARY_SIMPLE(BoolOr, ||)
         
         INTERPRETER_MIDCASE_UNARY_ASSIGN(AddAssign, +)
         INTERPRETER_MIDCASE_UNARY_ASSIGN(SubAssign, -)

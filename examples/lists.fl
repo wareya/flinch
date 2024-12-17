@@ -1,0 +1,35 @@
+[ 0 0 2 6 6 6 7 9 ] $a$ <-
+[ 3 3 4 9 14 ] $b$ <-
+
+$a !print
+$b !print
+
+"combining..."& !printstr
+
+$i$
+
+:loopend goto loopstart:
+
+    :laend goto la:
+        1 $i +=
+        i $a @? >= :exit if_goto
+    laend: a i @ b 0 @ < :la if_goto
+
+$a i b 0 @- @+
+
+1 $i +=
+loopend: i $a @? < $b @? 0 > or :loopstart if_goto
+
+exit:
+
+:fend goto fstart:
+    $a $a @? b 0 @- @+
+fend: $b @? 0 > :fstart if_goto
+
+$a !print
+$b !print
+
+#while (i < len(a) && len(b) > 0):
+#    while (i < len(a) && a[i] < b[0]):
+#        i++
+

@@ -150,7 +150,14 @@ TOKEN_LOG(double, double)
 struct Token {
     TKind kind;
     iword_t n;
+    //iword_t extra_1;
+    //iword_t extra_2;
 };
+
+Token make_token(TKind kind, iword_t n)
+{
+    return {kind, n};//, 0, 0};
+}
 
 struct DynamicType;
 struct Ref { DynamicType * ref; };
@@ -326,7 +333,7 @@ Program load_program(string text)
                 }
                 i2 += 1;
                 
-                if (text[i2] == '&')
+                if (text[i2] == '&') // reference-type strings
                     s += text[i2++];
                 
                 if (!isspace(text[i2]) && text[i2] != 0)
@@ -472,26 +479,26 @@ Program load_program(string text)
         if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});
-            program.push_back({FuncDec, get_token_func_num(token.substr(0, token.size() - 1))});
+            program.push_back(make_token(FuncDec, get_token_func_num(token.substr(0, token.size() - 1))));
         }
         else if (token != "^^" && token.front() == '^' && token.size() >= 2)
-            program.push_back({FuncLookup, get_token_func_num(token.substr(1))});
+            program.push_back(make_token(FuncLookup, get_token_func_num(token.substr(1))));
         else if (token == "^^")
         {
             var_defs.pop_back();
-            program.push_back({FuncEnd, 0});
+            program.push_back(make_token(FuncEnd, 0));
         }
         else if (token == "return")
-            program.push_back({Return, 0});
+            program.push_back(make_token(Return, 0));
         else if (token.front() == '$' && token.back() == '$' && token.size() >= 3)
         {
             auto s = token.substr(1, token.size() - 2);
             auto n = get_token_varname_num(s);
             var_defs.back().push_back(s);
             if (var_defs.size() > 1)
-                program.push_back({LocalVarDecLookup, n});
+                program.push_back(make_token(LocalVarDecLookup, n));
             else
-                program.push_back({GlobalVarDecLookup, n});
+                program.push_back(make_token(GlobalVarDecLookup, n));
         }
         else if (token.back() == '$' && token.size() >= 2)
         {
@@ -499,34 +506,34 @@ Program load_program(string text)
             auto n = get_token_varname_num(s);
             var_defs.back().push_back(s);
             if (var_defs.size() > 1)
-                program.push_back({LocalVarDec, n});
+                program.push_back(make_token(LocalVarDec, n));
             else
-                program.push_back({GlobalVarDec, n});
+                program.push_back(make_token(GlobalVarDec, n));
         }
         else if (token.front() == '$' && token.size() >= 2)
         {
             auto s = token.substr(1);
             auto n = get_token_varname_num(s);
             if (var_is_local(s))
-                program.push_back({LocalVarLookup, n});
+                program.push_back(make_token(LocalVarLookup, n));
             else if (var_is_global(s))
-                program.push_back({GlobalVarLookup, n});
+                program.push_back(make_token(GlobalVarLookup, n));
             else
                 throw std::runtime_error("Undefined variable " + s + " on line " + std::to_string(lines[i]));
         }
         else if (token.front() == ':' && token.size() >= 2 && token != "::")
-            program.push_back({LabelLookup, get_token_string_num(token.substr(1))});
+            program.push_back(make_token(LabelLookup, get_token_string_num(token.substr(1))));
         else if (token.back() == ':' && token.size() >= 2 && token != "::")
-            program.push_back({LabelDec, get_token_string_num(token.substr(0, token.size() - 1))});
+            program.push_back(make_token(LabelDec, get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
-            program.push_back({trivial_ops[token], 0});
+            program.push_back(make_token(trivial_ops[token], 0));
         else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
         {
             std::vector<DynamicType> str = {};
             for (size_t i = 1; i < token.size() - 1; i++)
                 str.push_back((int64_t)token[i]);
             auto n = get_token_stringval_num(std::move(str));
-            program.push_back({StringLiteral, n});
+            program.push_back(make_token(StringLiteral, n));
         }
         else if (token.size() >= 3 && token[0] == '"' && token.back() == '&')
         {
@@ -534,16 +541,16 @@ Program load_program(string text)
             for (size_t i = 1; i < token.size() - 2; i++)
                 str->push_back((int64_t)token[i]);
             auto n = get_token_stringref_num(str);
-            program.push_back({StringLitReference, n});
+            program.push_back(make_token(StringLitReference, n));
         }
         else if (token.size() >= 2 && token[0] == '!')
         {
             auto s = token.substr(1);
             // ->>> BUILTINS <<<-
             if (s == "print")
-                program.push_back({BuiltinCall, 0});
+                program.push_back(make_token(BuiltinCall, 0));
             else if (s == "printstr")
-                program.push_back({BuiltinCall, 1});
+                program.push_back(make_token(BuiltinCall, 1));
             else
                 throw runtime_error("Unknown built-in function: " + token);
         }
@@ -557,13 +564,13 @@ Program load_program(string text)
                 int64_t num3_smol = num >> 15;
                 int64_t num3 = num3_smol << 15;
                 if (num >= -32768 && num <= 32767)
-                    program.push_back({IntegerInline, (iword_t)num});
+                    program.push_back(make_token(IntegerInline, (iword_t)num));
                 else if (num2 == num && num2_smol >= -32768 && num2_smol <= 32767)
-                    program.push_back({IntegerInlineBigDec, (iword_t)num2_smol});
+                    program.push_back(make_token(IntegerInlineBigDec, (iword_t)num2_smol));
                 else if (num3 == num && num3_smol >= -32768 && num3_smol <= 32767)
-                    program.push_back({IntegerInlineBigBin, (iword_t)num3_smol});
+                    program.push_back(make_token(IntegerInlineBigBin, (iword_t)num3_smol));
                 else
-                    program.push_back({Integer, get_token_int_num(num)});
+                    program.push_back(make_token(Integer, get_token_int_num(num)));
             }
             else if (isfloat(token))
             {
@@ -574,15 +581,15 @@ Program load_program(string text)
                 const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
                 
                 if ((dec >> x) << x == dec)
-                    program.push_back({DoubleInline, (iword_t)(dec >> x)});
+                    program.push_back(make_token(DoubleInline, (iword_t)(dec >> x)));
                 else
-                    program.push_back({Double, get_token_double_num(d)});
+                    program.push_back(make_token(Double, get_token_double_num(d)));
             }
             else if (isname(token))
             {
                 auto n = get_token_varname_num(token);
                 if (var_is_local(token) || var_is_global(token))
-                    program.push_back({var_is_local(token) ? LocalVar : GlobalVar, n});
+                    program.push_back(make_token(var_is_local(token) ? LocalVar : GlobalVar, n));
                 else
                     throw std::runtime_error("Undefined variable " + token + " on line " + std::to_string(lines[i]));
             }
@@ -590,7 +597,7 @@ Program load_program(string text)
                 throw runtime_error("Invalid token: " + token);
         }
     }
-    program.push_back({Exit, 0});
+    program.push_back(make_token(Exit, 0));
     
     auto prog_erase = [&](auto i) -> auto {
         program.erase(program.begin() + i);
@@ -620,7 +627,7 @@ Program load_program(string text)
         }
     }
 
-    // rewrite root-level labels, identify root-level variables
+    // rewrite root-level labels
     vector<iword_t> root_labels;
     while (root_labels.size() < token_strings.size())
         root_labels.push_back({(iword_t)-1});
@@ -720,16 +727,17 @@ int interpret(const Program & programdata)
     vector<pair<iword_t, bool>> callstack;
     vector<iword_t> fstack;
     vector<DynamicType> globals = vars_default;
-    vector<vector<DynamicType>> varstack;
+    vector<vector<DynamicType>> varstacks;
+    vector<DynamicType> varstack;
     vector<vector<DynamicType>> evalstacks;
     vector<DynamicType> evalstack;
-
+    
     fstack.push_back(0);
-
+    
     auto valpush = [&](DynamicType x) { evalstack.push_back(x); };
-
+    
     auto valpop = [&]() { return vec_pop_back(evalstack); };
-
+    
     int i = 0;
     try
     {
@@ -740,14 +748,14 @@ int interpret(const Program & programdata)
             i = 0;\
             while (1) {\
                 auto n = program[i].n;\
-                switch (program[i].kind){
+                switch (program[i].kind) {
         #define INTERPRETER_CASE(NAME) case NAME: i += 1; {
         #define INTERPRETER_ENDCASE() } break;
         #define INTERPRETER_ENDDEF() default: throw std::runtime_error("internal interpreter error: unknown opcode"); } }
-
+        
         #else // of ifdef INTERPRETER_USE_LOOP
         
-        static void * handlers[] = {
+        static const void * const handlers[] = {
             &&HandlerGlobalVar,
             &&HandlerGlobalVarDec,
             &&HandlerGlobalVarLookup,
@@ -843,7 +851,7 @@ int interpret(const Program & programdata)
             
             &&HandlerExit,
         };
-
+        
         #define INTERPRETER_NEXT() goto *handlers[program[i].kind];
         #define INTERPRETER_DEF() goto AFTERDEFS;
         #define INTERPRETER_CASE(NAME)\
@@ -852,9 +860,10 @@ int interpret(const Program & programdata)
             //printf("at %d in %s\n", i - 1, #NAME);
         #define INTERPRETER_ENDCASE() } INTERPRETER_NEXT() }
         #define INTERPRETER_ENDDEF() if (false) { AFTERDEFS: { INTERPRETER_NEXT() } }
-
+        
         #endif // else of ifdef INTERPRETER_USE_LOOP
-            
+        
+        
         #define INTERPRETER_MIDCASE(NAME) \
             INTERPRETER_ENDCASE()\
             INTERPRETER_CASE(NAME)
@@ -865,30 +874,31 @@ int interpret(const Program & programdata)
             // leaving this as an addition instead of a pre-cached assignment prevents the compiler from combining FuncDec with GotoLabel
             // and we WANT to do this prevention, for branch prediction reasons
             i += funcs[n].len;
+        
         INTERPRETER_MIDCASE(FuncLookup)
             valpush(funcs[n]);
         
         INTERPRETER_MIDCASE(FuncEnd)
-            varstack.pop_back();
+            varstack = vec_pop_back(varstacks);
             i = callstack.back().first;
             bool is_eval = callstack.back().second;
             callstack.pop_back();
             if (is_eval) valpush(0); // functions return 0 by default
         INTERPRETER_MIDCASE(Return)
             auto val = valpop();
-            varstack.pop_back();
+            varstack = vec_pop_back(varstacks);
             i = callstack.back().first;
             bool is_eval = callstack.back().second;
             callstack.pop_back();
             if (is_eval) valpush(val);
         
         INTERPRETER_MIDCASE(LocalVarDec)
-            varstack.back()[n] = 0;
+            varstack[n] = 0;
         INTERPRETER_MIDCASE(LocalVarLookup)
-            valpush(Ref{&varstack.back()[n]});
+            valpush(Ref{&varstack[n]});
         INTERPRETER_MIDCASE(LocalVarDecLookup)
-            varstack.back()[n] = 0;
-            valpush(Ref{&varstack.back()[n]});
+            varstack[n] = 0;
+            valpush(Ref{&varstack[n]});
         INTERPRETER_MIDCASE(GlobalVarDec)
             globals[n] = 0;
         INTERPRETER_MIDCASE(GlobalVarLookup)
@@ -906,13 +916,15 @@ int interpret(const Program & programdata)
             Func f = valpop().as_func();
             callstack.push_back({i, 0});
             fstack.push_back(f.name);
-            varstack.push_back(vars_default);
+            varstacks.push_back(std::move(varstack));
+            varstack = vars_default;
             i = f.loc;
         INTERPRETER_MIDCASE(CallEval)
             Func f = valpop().as_func();
             callstack.push_back({i, 1});
             fstack.push_back(f.name);
-            varstack.push_back(vars_default);
+            varstacks.push_back(std::move(varstack));
+            varstack = vars_default;
             i = f.loc;
         
         INTERPRETER_MIDCASE(Assign)
@@ -922,7 +934,7 @@ int interpret(const Program & programdata)
         
         INTERPRETER_MIDCASE(AssignVar)
             auto val = valpop();
-            varstack.back()[n] = val;
+            varstack[n] = val;
         
         INTERPRETER_MIDCASE(ScopeOpen)
             evalstacks.push_back(std::move(evalstack));
@@ -935,9 +947,8 @@ int interpret(const Program & programdata)
             auto val = valpop();
             if (val) i = dest.loc;
         INTERPRETER_MIDCASE(IfGotoLabel)
-            auto loc = n;
             auto val = valpop();
-            if (val) i = loc;
+            if (val) i = n;
         
         INTERPRETER_MIDCASE(ForLoop)
             Label dest = valpop().as_label();
@@ -948,7 +959,6 @@ int interpret(const Program & programdata)
             if (*ref.ref <= num)
                 i = dest.loc;
         INTERPRETER_MIDCASE(ForLoopLabel)
-            auto loc = n;
             auto num = valpop();
             auto v = valpop();
             //f_print_inner(&num);
@@ -957,14 +967,13 @@ int interpret(const Program & programdata)
             *ref.ref = (*ref.ref) + 1;
             //f_print_inner(&v);
             if (*ref.ref <= num)
-                i = loc;
+                i = n;
         
         #define INTERPRETER_MIDCASE_GOTOLABELCMP(X, OP) \
         INTERPRETER_MIDCASE(IfGotoLabel##X)\
-            auto loc = n;\
             auto val2 = valpop();\
             auto val1 = valpop();\
-            if (val1 OP val2) i = loc;\
+            if (val1 OP val2) i = n;
         
         INTERPRETER_MIDCASE_GOTOLABELCMP(EQ, ==)
         INTERPRETER_MIDCASE_GOTOLABELCMP(NE, !=)
@@ -983,14 +992,14 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(NAME)\
             auto b = valpop();\
             auto a = valpop();\
-            valpush(a OP b);\
+            valpush(a OP b);
         
         #define INTERPRETER_MIDCASE_UNARY_ASSIGN(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
             Ref ref = valpop().as_ref();\
             auto a = valpop();\
             auto & v = *ref.ref;\
-            v = v OP a;\
+            v = v OP a;
         
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Add, +)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Sub, -)
@@ -1040,7 +1049,7 @@ int interpret(const Program & programdata)
             valpush(get_token_double(n));
         
         INTERPRETER_MIDCASE(LocalVar)
-            valpush(varstack.back()[n]);
+            valpush(varstack[n]);
         
         INTERPRETER_MIDCASE(GlobalVar)
             valpush(globals[n]);
@@ -1159,14 +1168,14 @@ int main(int argc, char ** argv)
 
     auto file = fopen(argv[1], "rb");
     if (!file)
-        return printf("Failed to open file %s\n", argv[1]), 0;
+        return printf("Failed to open file %s\n", argv[1]), 1;
 
     fseek(file, 0, SEEK_END);
     long int fsize = ftell(file);
     rewind(file);
 
     if (fsize < 0)
-        return printf("Failed to read from file %s\n", argv[1]), 0;
+        return printf("Failed to read from file %s\n", argv[1]), 1;
     
     string text;
     text.resize(fsize);
@@ -1175,7 +1184,7 @@ int main(int argc, char ** argv)
     fclose(file);
 
     if (bytes_read != (size_t)fsize)
-        return printf("Failed to read from file %s\n", argv[1]), 0;
+        return printf("Failed to read from file %s\n", argv[1]), 1;
 
     auto p = load_program(text);
     interpret(p);

@@ -9,11 +9,9 @@ $b !print
 $i$
 
 :loopend goto loopstart:
-    ( i >= a @? ) :doit if_goto
+    ( i >= (( a @? )) ) :doit if_goto # stuff in single parens gets stuffed through shunting yard. double parens excepts from shunting yard.
     ( a @ i <= b @ 0 ) :nextiter if_goto
  
-    $x$
-    
     doit: ( $a @+ i ( b @- 0 ) )
     
     nextiter: ( 1 += $i )

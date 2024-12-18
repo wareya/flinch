@@ -77,7 +77,7 @@ A: I was curious.
 
 #### Q: This is disgusting though?
 
-A: Yeah but it's fully-featured (aside from lacking a real type system and being fully dynamically typed) and really, really, really short to implement.
+A: Yeah, but it's fully-featured (as far as being a dynamically-typed language without closures, blocks, or classes goes) and really, really, really short to implement.
 
 #### Q: Does this have literally any practical uses at all?
 
@@ -93,7 +93,7 @@ The shunting yard transformation (i.e. `( .... )` around expressions) has the fo
 
 
 ```
-    6     @   @-  @+
+    6     @   @-  @+  @@
     5     *  /  %  <<  >>  &
     4     +  -  |  ^
     3     ==  <=  >=  !=  >  <
@@ -119,9 +119,9 @@ $ tokei flinch.hpp
 ===============================================================================
  Language            Files        Lines         Code     Comments       Blanks
 ===============================================================================
- C++ Header              1         1195          994           19          182
+ C++ Header              1         1197          996           19          182
 ===============================================================================
- Total                   1         1195          994           19          182
+ Total                   1         1197          996           19          182
 ===============================================================================
 ```
 

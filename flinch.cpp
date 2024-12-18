@@ -24,6 +24,7 @@ T vec_pop_back(std::vector<T> & v)
 using namespace std;
 
 typedef uint32_t iword_t;
+typedef  int32_t iwordsigned_t;
 
 // token kind
 enum TKind : iword_t {
@@ -94,6 +95,7 @@ enum TKind : iword_t {
     
     ForLoop,
     ForLoopLabel,
+    ForLoopFull,
     
     ScopeOpen,
     ScopeClose,
@@ -150,13 +152,13 @@ TOKEN_LOG(double, double)
 struct Token {
     TKind kind;
     iword_t n;
-    //iword_t extra_1;
-    //iword_t extra_2;
+    iword_t extra_1;
+    iword_t extra_2;
 };
 
 Token make_token(TKind kind, iword_t n)
 {
-    return {kind, n};//, 0, 0};
+    return {kind, n, 0, 0};
 }
 
 struct DynamicType;
@@ -360,8 +362,7 @@ Program load_program(string text)
     //printf("(%d)\n", lines.size());
     
     auto isint = [&](const std::string& str) {
-        if (str.empty())
-            return false;
+        if (str.empty()) return false;
         
         for (size_t i = (str[0] == '+' || str[0] == '-'); i < str.length(); i++)
         {
@@ -372,6 +373,7 @@ Program load_program(string text)
         return true;
     };
     auto isfloat = [&](const string& str) {
+        if (isint(str)) return false;
         try
         {
             stod(str);
@@ -563,11 +565,16 @@ Program load_program(string text)
                 int64_t num2 = num2_smol * 10000;
                 int64_t num3_smol = num >> 15;
                 int64_t num3 = num3_smol << 15;
-                if (num >= -32768 && num <= 32767)
+                
+                int64_t d = (int64_t)1 << (sizeof(iword_t)*8-1);
+                int64_t dhi = d-1;
+                int64_t dlo = -d;
+                
+                if (num >= dlo && num <= dhi)
                     program.push_back(make_token(IntegerInline, (iword_t)num));
-                else if (num2 == num && num2_smol >= -32768 && num2_smol <= 32767)
+                else if (num2 == num && num2_smol >= dlo && num2_smol <= dhi)
                     program.push_back(make_token(IntegerInlineBigDec, (iword_t)num2_smol));
-                else if (num3 == num && num3_smol >= -32768 && num3_smol <= 32767)
+                else if (num3 == num && num3_smol >= dlo && num3_smol <= dhi)
                     program.push_back(make_token(IntegerInlineBigBin, (iword_t)num3_smol));
                 else
                     program.push_back(make_token(Integer, get_token_int_num(num)));
@@ -604,19 +611,30 @@ Program load_program(string text)
         lines.erase(lines.begin() + i);
     };
 
-    auto still_valid = [&]() { return i < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; };
+    auto still_valid = [&]() { return i < program.size() && i + 1 < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; };
 
     // peephole optimizer!
-    for (i = 0; i < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; ++i)
+    for (i = 0; (((ptrdiff_t)i) < 0 || i < program.size()) && program[i].kind != Exit && program[i + 1].kind != Exit; ++i)
     {
         if (still_valid() && program[i].kind == LocalVarLookup &&
-            (program[i+1].kind == Assign || program[i+1].kind == Goto || program[i+1].kind == IfGoto || program[i+1].kind == ForLoop))
+            (program[i+1].kind == Assign || program[i+1].kind == Goto || program[i+1].kind == IfGoto))
         {
-            program[i].kind =
-                program[i+1].kind == Assign ? AssignVar :
-                program[i+1].kind == Goto ? GotoLabel :
-                program[i+1].kind == IfGoto ? IfGotoLabel :
-                ForLoopLabel;//program[i+1].kind == ForLoop ? ForLoopLabel :
+            program[i].kind = program[i+1].kind == Assign ? AssignVar : program[i+1].kind == Goto ? GotoLabel : IfGotoLabel;
+            prog_erase(i-- + 1);
+        }
+        if (still_valid() && program[i].kind == LabelLookup && program[i+1].kind == ForLoop)
+        {
+            program[i].kind = ForLoopLabel;
+            prog_erase(i-- + 1);
+            i--;
+        }
+        if (still_valid() && i + 2 < program.size() && program[i].kind == LocalVarLookup && program[i+1].kind == IntegerInline && program[i+2].kind == ForLoopLabel)
+        {
+            program[i].kind = ForLoopFull;
+            program[i].extra_1 = program[i].n;
+            program[i].extra_2 = program[i+1].n;
+            program[i].n = program[i+2].n;
+            prog_erase(i + 2);
             prog_erase(i-- + 1);
         }
         if (still_valid() && program[i].kind >= CmpEQ && program[i].kind <= CmpGT && program[i+1].kind == IfGotoLabel)
@@ -627,40 +645,6 @@ Program load_program(string text)
         }
     }
 
-    // rewrite root-level labels
-    vector<iword_t> root_labels;
-    while (root_labels.size() < token_strings.size())
-        root_labels.push_back({(iword_t)-1});
-    for (i = 0; i < program.size() && program[i].kind != Exit; i++)
-    {
-        auto token = program[i];
-        if (token.kind == FuncDec)
-        {
-            while (program[i++].kind != FuncEnd) { }
-        }
-        if (program[i].kind == LabelDec)
-        {
-            root_labels[program[i].n] = (iword_t)i;
-            prog_erase(i--);
-        }
-    }
-    // this needs to be a separate pass because labels can be seen upwards, not just downwards
-    for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
-    {
-        auto token = program[i];
-        if (token.kind == FuncDec)
-        {
-            while (program[i++].kind != FuncEnd) { }
-        }
-        if (program[i].kind == LabelLookup || program[i].kind == GotoLabel || program[i].kind == ForLoopLabel ||
-            (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
-        {
-            program[i].n = root_labels[program[i].n];
-            if (program[i].n == (iword_t)-1)
-                throw std::runtime_error("Unknown label usage on or near line " + std::to_string(lines[i]));
-        }
-    }
-    
     vector<Func> funcs;
     while (funcs.size() < token_funcs.size())
         funcs.push_back(Func{0,0,0});
@@ -693,7 +677,7 @@ Program load_program(string text)
             unsigned int i2 = i + 1;
             for (; program[i2].kind != FuncEnd; i2 += 1)
             {
-                if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel ||
+                if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel || program[i2].kind == ForLoopFull ||
                     (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
                 {
                     program[i2].n = labels[program[i2].n];
@@ -708,6 +692,34 @@ Program load_program(string text)
             //token.n = start + funcs[n].len + 1;
             // replace function num with the target position to jump to
             //token.n = start + funcs[n].len + 1;
+        }
+    }
+    
+    // rewrite root-level labels
+    vector<iword_t> root_labels;
+    while (root_labels.size() < token_strings.size())
+        root_labels.push_back({(iword_t)-1});
+    for (i = 0; i < program.size() && program[i].kind != Exit; i++)
+    {
+        if (program[i].kind == FuncDec) i += funcs[program[i].n].len;
+        
+        if (program[i].kind == LabelDec)
+        {
+            root_labels[program[i].n] = (iword_t)i;
+            prog_erase(i--);
+        }
+    }
+    // this needs to be a separate pass because labels can be seen upwards, not just downwards
+    for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
+    {
+        if (program[i].kind == FuncDec) i += funcs[program[i].n].len;
+        
+        if (program[i].kind == LabelLookup || program[i].kind == GotoLabel || program[i].kind == ForLoopLabel || program[i].kind == ForLoopFull ||
+            (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
+        {
+            program[i].n = root_labels[program[i].n];
+            if (program[i].n == (iword_t)-1)
+                throw std::runtime_error("Unknown label usage on or near line " + std::to_string(lines[i]));
         }
     }
     
@@ -823,6 +835,7 @@ int interpret(const Program & programdata)
             
             &&HandlerForLoop,
             &&HandlerForLoopLabel,
+            &&HandlerForLoopFull,
             
             &&HandlerScopeOpen,
             &&HandlerScopeClose,
@@ -953,20 +966,28 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(ForLoop)
             Label dest = valpop().as_label();
             auto num = valpop();
-            auto v = valpop();
-            Ref ref = v.as_ref();
+            auto ref = valpop().as_ref();
+            if (!num.is_int() || !ref.ref->is_int())
+                throw std::runtime_error("Tried to use for loop with non-integer");
             *ref.ref = *ref.ref + 1;
             if (*ref.ref <= num)
                 i = dest.loc;
         INTERPRETER_MIDCASE(ForLoopLabel)
             auto num = valpop();
-            auto v = valpop();
-            //f_print_inner(&num);
-            //f_print_inner(&v);
-            Ref ref = v.as_ref();
+            auto ref = valpop().as_ref();
+            if (!num.is_int() || !ref.ref->is_int())
+                throw std::runtime_error("Tried to use for loop with non-integer");
             *ref.ref = (*ref.ref) + 1;
-            //f_print_inner(&v);
             if (*ref.ref <= num)
+                i = n;
+        INTERPRETER_MIDCASE(ForLoopFull)
+            auto & _v = varstack[program[i-1].extra_1];
+            if (!_v.is_int())
+                throw std::runtime_error("Tried to use for loop with non-integer");
+            auto & v = _v.as_int();
+            int64_t num = (iwordsigned_t)program[i-1].extra_2;
+            v = v + 1;
+            if (v <= num)
                 i = n;
         
         #define INTERPRETER_MIDCASE_GOTOLABELCMP(X, OP) \
@@ -1030,11 +1051,11 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpGT, >)
         
         INTERPRETER_MIDCASE(IntegerInline)
-            valpush((int64_t)(int16_t)n);
+            valpush((int64_t)(iwordsigned_t)n);
         INTERPRETER_MIDCASE(IntegerInlineBigDec)
-            valpush(((int64_t)(int16_t)n)*10000);
+            valpush(((int64_t)(iwordsigned_t)n)*10000);
         INTERPRETER_MIDCASE(IntegerInlineBigBin)
-            valpush(((int64_t)(int16_t)n)<<15);
+            valpush(((int64_t)(iwordsigned_t)n)<<15);
         INTERPRETER_MIDCASE(Integer)
             valpush((int64_t)get_token_int(n));
         

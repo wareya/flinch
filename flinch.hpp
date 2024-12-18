@@ -14,8 +14,7 @@
 #include <unordered_map>
 #include <initializer_list>
 
-template <typename T>
-T vec_pop_back(std::vector<T> & v)
+template <typename T> T vec_pop_back(std::vector<T> & v)
 {
     T ret = std::move(v.back());
     v.pop_back();
@@ -133,8 +132,7 @@ iword_t get_token_##NAME##_num(TYPE s)\
     auto n = token_##NAME##s.size();\
     for (iword_t i = 0; i < n; i++)\
     {\
-        if (token_##NAME##s[i] == s)\
-            return i;\
+        if (token_##NAME##s[i] == s) return i;\
     }\
     token_##NAME##s.push_back(s);\
     return n;\
@@ -152,9 +150,7 @@ TOKEN_LOG(double, double)
 
 struct Token {
     TKind kind;
-    iword_t n;
-    iword_t extra_1;
-    iword_t extra_2;
+    iword_t n, extra_1, extra_2;
 };
 
 Token make_token(TKind kind, iword_t n)
@@ -167,11 +163,7 @@ struct Ref { DynamicType * ref; };
 
 struct Label { int loc; };
 struct Array { shared_ptr<vector<DynamicType>> items; };
-struct Func {
-    iword_t loc;
-    iword_t len;
-    iword_t name;
-};
+struct Func { iword_t loc, len, name; };
 
 
 // DynamicType can hold any of these types
@@ -303,7 +295,13 @@ Program load_program(string text)
         else
         {
             size_t start_i = i;
-            if (text[i] == '"')
+            if (text[i] == '\'')
+            {
+                i += 3 + (text[i+1] == '\\');
+                if (i >= text.size() || i < start_i || text[i-1] != '\'')
+                    throw std::runtime_error("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(line));
+            }
+            else if (text[i] == '"')
             {
                 i++;
                 string s = "\"";
@@ -312,18 +310,13 @@ Program load_program(string text)
                     if (text[i] == '\\' && i + 1 < text.size())
                     {
                         if (text[i+1] == 'x' && i + 3 < text.size())
-                        {
-                            char str[3] = {text[i+2], text[i+3], 0};
-                            char c = std::strtol(str, nullptr, 16);
-                            s += c;
-                        }
+                            s += std::strtol(text.substr(i+2, 2).data(), nullptr, 16);
                         else if (text[i+1] == 'n') s += '\n';
                         else if (text[i+1] == 'r') s += '\r';
                         else if (text[i+1] == 't') s += '\t';
                         else if (text[i+1] == '\\') s += '\\';
                         else if (text[i+1] == '\0') s += '\0';
-                        else
-                            s += text[i+1];
+                        else s += text[i+1];
                         i += 1;
                     }
                     else
@@ -369,7 +362,6 @@ Program load_program(string text)
     };
     auto isfloat = [&](const string& str) {
         if (isint(str)) return false;
-        
         try
         {
             stod(str);
@@ -590,6 +582,16 @@ Program load_program(string text)
             auto s = token.substr(1);
             program.push_back(make_token(BuiltinCall, builtins_lookup(s)));
         }
+        else if ((token.size() == 3 || token.size() == 4) && token[0] == '\'' && token.back() == '\'')
+        {
+            if (token.size() == 3) program.push_back(make_token(IntegerInline, token[1]));
+            else if (token.size() != 4 || token[1] != '\\') throw std::runtime_error("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(lines[i]));
+            else if (token[2] == 'n') program.push_back(make_token(IntegerInline, '\n'));
+            else if (token[2] == 'r') program.push_back(make_token(IntegerInline, '\r'));
+            else if (token[2] == 't') program.push_back(make_token(IntegerInline, '\t'));
+            else if (token[2] == '\\') program.push_back(make_token(IntegerInline, '\\'));
+            else program.push_back(make_token(IntegerInline, token[2]));
+        }
         else
         {
             if (isint(token))
@@ -709,11 +711,13 @@ Program load_program(string text)
                     prog_erase(i2--);
                 }
             }
+            
+            // this needs to be a separate pass because labels can be seen upwards, not just downwards
             size_t i2 = i + 1;
             for (; program[i2].kind != FuncEnd; i2 += 1)
             {
-                if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel || program[i2].kind == ForLoopFull ||
-                    (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
+                if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel ||
+                    program[i2].kind == ForLoopFull || (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
                 {
                     program[i2].n = labels[program[i2].n];
                     if(program[i2].n == (iword_t)-1)
@@ -731,12 +735,12 @@ Program load_program(string text)
     }
     
     // this needs to be a separate pass because labels can be seen upwards, not just downwards
-    for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
+    for (i = 0; i < program.size() && program[i].kind != Exit; i++)
     {
         if (program[i].kind == FuncDec) i += funcs[program[i].n].len;
         
-        if (program[i].kind == LabelLookup || program[i].kind == GotoLabel || program[i].kind == ForLoopLabel || program[i].kind == ForLoopFull ||
-            (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
+        if (program[i].kind == LabelLookup || program[i].kind == GotoLabel || program[i].kind == ForLoopLabel ||
+            program[i].kind == ForLoopFull || (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
         {
             program[i].n = root_labels[program[i].n];
             if (program[i].n == (iword_t)-1)
@@ -1025,8 +1029,7 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE_GOTOLABELCMP(GT, >)
         
         INTERPRETER_MIDCASE(Goto)
-            Label dest = valpop().as_label();
-            i = dest.loc;
+            i = valpop().as_label().loc;
         INTERPRETER_MIDCASE(GotoLabel)
             i = n;
         
@@ -1040,8 +1043,7 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(NAME)\
             Ref ref = valpop().as_ref();\
             auto a = valpop();\
-            auto & v = *ref.ref;\
-            v = v OP a;
+            *ref.ref = *ref.ref OP a;
         
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Add, +)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Sub, -)
@@ -1082,8 +1084,7 @@ int interpret(const Program & programdata)
         
         INTERPRETER_MIDCASE(DoubleInline)
             const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
-            uint64_t dec = n;
-            dec <<= x;
+            uint64_t dec = ((uint64_t)n) << x;
             double d;
             memcpy(&d, &dec, sizeof(dec));
             valpush(d);
@@ -1196,8 +1197,7 @@ int interpret(const Program & programdata)
     }
     catch (const exception& e)
     {
-        printf("(token %d)\n", i);
-        throw std::runtime_error("Error on line " + std::to_string(lines[i]) + ": " + e.what());
+        throw std::runtime_error("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");
     }
     return 0;
 }

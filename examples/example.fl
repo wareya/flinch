@@ -69,3 +69,12 @@ test !print
 
 ( 0x20 == ( " " !first ) ) !print
 ( 0x20 == ( "x" !first ) ) !print
+
+'a' !print
+'f' !print
+
+[ 'a' ] !printstr
+[ 'f' ] !printstr
+
+( 0x20 == ' ' ) !print
+( 0x20 == 'x' ) !print

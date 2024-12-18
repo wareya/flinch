@@ -569,7 +569,7 @@ Program load_program(string text)
             program.push_back(make_token(LabelDec, get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
             program.push_back(make_token(trivial_ops[token], 0));
-        else if (token.size() >= 3 && token[0] == '"' && token.back() == '*')
+        else if (token.size() >= 3 && token[0] == '"' && token.back() == '*') // '"' (fix tokei line counts)
         {
             std::vector<DynamicType> str = {};
             for (size_t i = 1; i < token.size() - 2; i++)

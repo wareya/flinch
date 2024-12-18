@@ -1,17 +1,18 @@
+#ifndef FLINCH_INCLUDE
+#define FLINCH_INCLUDE
+
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <vector>
-#include <sstream>
-#include <limits>
 #include <variant>
 #include <cstdint>
 #include <cmath>
 #include <cstring>
-#include <iomanip>
 #include <memory>
 
 #include <unordered_map>
+#include <initializer_list>
 
 template <typename T>
 T vec_pop_back(std::vector<T> & v)
@@ -292,9 +293,7 @@ Program load_program(string text)
     {
         while (i < text.size() && isspace(text[i]))
         {
-            if (text[i] == '\n')
-                line++;
-            i++;
+            if (text[i++] == '\n') line++;
         }
 
         if (i < text.size() && text[i] == '#')
@@ -329,13 +328,11 @@ Program load_program(string text)
                     }
                     else
                         s += text[i2];
-                    if (s.back() == '"')
-                        break;
+                    if (s.back() == '"') break;
                     i2 += 1;
                 }
-                i2 += 1;
                 
-                if (text[i2] == '&') // reference-type strings
+                if (text[++i2] == '&') // reference-type strings
                     s += text[i2++];
                 
                 if (!isspace(text[i2]) && text[i2] != 0)
@@ -374,6 +371,7 @@ Program load_program(string text)
     };
     auto isfloat = [&](const string& str) {
         if (isint(str)) return false;
+        
         try
         {
             stod(str);
@@ -390,8 +388,7 @@ Program load_program(string text)
             return false;
         for (size_t i = 1; i < str.size(); i++)
         {
-            if (!isalnum(str[i]) && str[i] != '_')
-                return false;
+            if (!isalnum(str[i]) && str[i] != '_') return false;
         }
         return true;
     };
@@ -399,17 +396,13 @@ Program load_program(string text)
     get_token_func_num("");
     
     vector<Token> program;
-    
-    vector<vector<string>> var_defs;
-    var_defs.push_back({});
+    vector<vector<string>> var_defs = {{}};
     
     auto var_is_local = [&](string & s) {
-        if (var_defs.size() == 1)
-            return false;
+        if (var_defs.size() == 1) return false;
         for (size_t i = 0; i < var_defs.back().size(); i++)
         {
-            if (var_defs.back()[i] == s)
-                return true;
+            if (var_defs.back()[i] == s) return true;
         }
         return false;
     };
@@ -417,10 +410,53 @@ Program load_program(string text)
     auto var_is_global = [&](string & s) {
         for (size_t i = 0; i < var_defs[0].size(); i++)
         {
-            if (var_defs[0][i] == s)
-                return true;
+            if (var_defs[0][i] == s) return true;
         }
         return false;
+    };
+    
+    auto shunting_yard = [&](size_t i) {
+        size_t start_i = i;
+        program_texts.erase(program_texts.begin() + i); // erase leading paren
+        
+        unordered_map<string, int> prec;
+        
+        #define ADD_PREC(N, X) for (auto & s : X) prec.insert({s, N});
+        ADD_PREC(5, (initializer_list<string>{ "@", "@-" }));
+        ADD_PREC(4, (initializer_list<string>{ "*", "/", "%", "<<", ">>", "&" }));
+        ADD_PREC(3, (initializer_list<string>{ "+", "-", "|", "^" }));
+        ADD_PREC(2, (initializer_list<string>{ "==", "<=", ">=", "!=", ">", "<" }));
+        ADD_PREC(1, (initializer_list<string>{ "and", "or" }));
+        ADD_PREC(0, (initializer_list<string>{ "->", "+=", "-=", "*=", "/=", "%=" }));
+        
+        vector<string> nums, ops;
+        
+        while (i < program_texts.size() && program_texts[i] != ")")
+        {
+            if (program_texts[i] == "(")
+            {
+                while (program_texts[i] != ")")
+                    nums.push_back(program_texts[i++]);
+                nums.push_back(program_texts[i++]);
+            }
+            else if (!prec.count(program_texts[i]))
+                nums.push_back(program_texts[i++]);
+            else
+            {
+                while (ops.size() && prec[program_texts[i]] < prec[ops.back()])
+                    nums.push_back(vec_pop_back(ops));
+                ops.push_back(program_texts[i++]);
+            }
+        }
+        
+        while (ops.size()) nums.push_back(vec_pop_back(ops));
+        
+        if (i >= program_texts.size())
+            throw std::runtime_error("Paren expression must end in a closing paren, i.e. ')', on or near line " + to_string(lines[start_i]));
+        
+        for (size_t j = 0; j < nums.size(); j++)
+            program_texts[j + start_i] = nums[j];
+        program_texts.erase(program_texts.begin() + i);
     };
     
     unordered_map<string, TKind> trivial_ops;
@@ -431,7 +467,7 @@ Program load_program(string text)
     trivial_ops.insert({"goto", Goto});
     trivial_ops.insert({"inc_goto_until", ForLoop});
     
-    trivial_ops.insert({"<-", Assign});
+    trivial_ops.insert({"->", Assign});
     
     trivial_ops.insert({"[", ScopeOpen});
     trivial_ops.insert({"]~", ScopeClose});
@@ -474,11 +510,13 @@ Program load_program(string text)
     trivial_ops.insert({"@+", ArrayPushIn});
     trivial_ops.insert({"@-", ArrayPopOut});
     
-    for (i = 0; i < program_texts.size() && program_texts[i] != ""; ++i)
+    for (i = 0; i < program_texts.size() && program_texts[i] != ""; i++)
     {
-        string token = program_texts[i];
+        string & token = program_texts[i];
 
-        if (token != "^^" && token.back() == '^' && token.size() >= 2)
+        if (token == "(")
+            shunting_yard(i--);
+        else if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});
             program.push_back(make_token(FuncDec, get_token_func_num(token.substr(0, token.size() - 1))));
@@ -606,6 +644,9 @@ Program load_program(string text)
     }
     program.push_back(make_token(Exit, 0));
     
+    //for (auto & s : program_texts)
+    //    printf("%s\n", s.data());
+    
     auto prog_erase = [&](auto i) -> auto {
         program.erase(program.begin() + i);
         lines.erase(lines.begin() + i);
@@ -645,27 +686,25 @@ Program load_program(string text)
         }
     }
 
-    vector<Func> funcs;
-    while (funcs.size() < token_funcs.size())
-        funcs.push_back(Func{0,0,0});
+    vector<Func> funcs(token_funcs.size());
+    std::fill(funcs.begin(), funcs.end(), Func{0,0,0});
+    
+    vector<iword_t> root_labels(token_strings.size());
+    std::fill(root_labels.begin(), root_labels.end(), (iword_t)-1);
     
     // rewrite in-function labels, register functions
+    // also rewrite root-level labels
     for (i = 0; i < program.size() && program[i].kind != Exit; i++)
     {
-        auto & token = program[i];
-        
-        if (token.kind == FuncDec)
+        if (program[i].kind == FuncDec)
         {
-            auto n = token.n;
-            if (funcs[n].name != 0)
+            if (funcs[program[i].n].name != 0)
                 throw std::runtime_error("Redefined function on or near line " + std::to_string(lines[i]));
             
-            vector<iword_t> labels;
+            vector<iword_t> labels(token_strings.size());
+            std::fill(labels.begin(), labels.end(), (iword_t)-1);
             
-            while (labels.size() < token_strings.size())
-                labels.push_back({(iword_t)-1});
-            
-            for (int i2 = i + 1; program[i2].kind != FuncEnd; i2 += 1)
+            for (size_t i2 = i + 1; program[i2].kind != FuncEnd; i2 += 1)
             {
                 if (program[i2].kind == LabelDec)
                 {
@@ -673,8 +712,7 @@ Program load_program(string text)
                     prog_erase(i2--);
                 }
             }
-            unsigned int start = i;
-            unsigned int i2 = i + 1;
+            size_t i2 = i + 1;
             for (; program[i2].kind != FuncEnd; i2 += 1)
             {
                 if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel || program[i2].kind == ForLoopFull ||
@@ -685,30 +723,16 @@ Program load_program(string text)
                         throw std::runtime_error("Unknown label usage on or near line " + std::to_string(lines[i2]));
                 }
             }
-            funcs[n] = Func{(iword_t)(start + 1), (iword_t)(i2 - start), n};
-            
-            // replace function def with a goto that jumps over the function def
-            //token.kind = GotoLabel;
-            //token.n = start + funcs[n].len + 1;
-            // replace function num with the target position to jump to
-            //token.n = start + funcs[n].len + 1;
+            funcs[program[i].n] = Func{(iword_t)(i + 1), (iword_t)(i2 - i), program[i].n};
+            i = i2;
         }
-    }
-    
-    // rewrite root-level labels
-    vector<iword_t> root_labels;
-    while (root_labels.size() < token_strings.size())
-        root_labels.push_back({(iword_t)-1});
-    for (i = 0; i < program.size() && program[i].kind != Exit; i++)
-    {
-        if (program[i].kind == FuncDec) i += funcs[program[i].n].len;
-        
-        if (program[i].kind == LabelDec)
+        else if (program[i].kind == LabelDec)
         {
             root_labels[program[i].n] = (iword_t)i;
             prog_erase(i--);
         }
     }
+    
     // this needs to be a separate pass because labels can be seen upwards, not just downwards
     for (i = 0; i < program.size() && program[i].kind != Exit; ++i)
     {
@@ -1182,31 +1206,4 @@ int interpret(const Program & programdata)
     return 0;
 }
 
-int main(int argc, char ** argv)
-{
-    if (argc != 2)
-        return puts("Usage: ./flinch <filename>"), 0;
-
-    auto file = fopen(argv[1], "rb");
-    if (!file)
-        return printf("Failed to open file %s\n", argv[1]), 1;
-
-    fseek(file, 0, SEEK_END);
-    long int fsize = ftell(file);
-    rewind(file);
-
-    if (fsize < 0)
-        return printf("Failed to read from file %s\n", argv[1]), 1;
-    
-    string text;
-    text.resize(fsize);
-
-    size_t bytes_read = fread(text.data(), 1, fsize, file);
-    fclose(file);
-
-    if (bytes_read != (size_t)fsize)
-        return printf("Failed to read from file %s\n", argv[1]), 1;
-
-    auto p = load_program(text);
-    interpret(p);
-}
+#endif // FLINCH_INCLUDE

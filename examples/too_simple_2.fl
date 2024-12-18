@@ -1,8 +1,8 @@
 
 calc_pi^
-    0.0 $sum$ <-
-    -1.0 $flip$ <-
-    0 $i$ <-
+    0.0 $sum$ ->
+    -1.0 $flip$ ->
+    0 $i$ ->
     
     :loopend goto
     
@@ -18,6 +18,6 @@ calc_pi^
 
 ^calc_pi call_eval
 
-$ret$ <-
+$ret$ ->
 ret !print
 ret

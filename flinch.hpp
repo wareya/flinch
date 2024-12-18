@@ -18,8 +18,7 @@ template <typename T>
 T vec_pop_back(std::vector<T> & v)
 {
     T ret = std::move(v.back());
-    v.pop_back();
-    return ret;
+    return v.pop_back(), ret;
 }
 
 using namespace std;
@@ -422,12 +421,13 @@ Program load_program(string text)
         unordered_map<string, int> prec;
         
         #define ADD_PREC(N, X) for (auto & s : X) prec.insert({s, N});
-        ADD_PREC(5, (initializer_list<string>{ "@", "@-" }));
-        ADD_PREC(4, (initializer_list<string>{ "*", "/", "%", "<<", ">>", "&" }));
-        ADD_PREC(3, (initializer_list<string>{ "+", "-", "|", "^" }));
-        ADD_PREC(2, (initializer_list<string>{ "==", "<=", ">=", "!=", ">", "<" }));
-        ADD_PREC(1, (initializer_list<string>{ "and", "or" }));
-        ADD_PREC(0, (initializer_list<string>{ "->", "+=", "-=", "*=", "/=", "%=" }));
+        ADD_PREC(6, (initializer_list<string>{ "@", "@-", "@+" }));
+        ADD_PREC(5, (initializer_list<string>{ "*", "/", "%", "<<", ">>", "&" }));
+        ADD_PREC(4, (initializer_list<string>{ "+", "-", "|", "^" }));
+        ADD_PREC(3, (initializer_list<string>{ "==", "<=", ">=", "!=", ">", "<" }));
+        ADD_PREC(2, (initializer_list<string>{ "and", "or" }));
+        ADD_PREC(1, (initializer_list<string>{ "->", "+=", "-=", "*=", "/=", "%=" }));
+        ADD_PREC(0, (initializer_list<string>{ ";" }));
         
         vector<string> nums, ops;
         
@@ -516,6 +516,7 @@ Program load_program(string text)
 
         if (token == "(")
             shunting_yard(i--);
+        else if (token == ";") { }
         else if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});

@@ -83,8 +83,12 @@ test $test 0 @ ->
 [ "asdf" !first ] !printstr
 [ "asdf" !last ] !printstr
 
-( 0x20 == ( " " !first ) ) !print
-( 0x20 == ( "x" !first ) ) !print
+# ( ... ) induces the shunting yard transformation, allowing for infix expressions
+# (( ... )) suppresses it, allowing for mixed infix and suffix/concatenation code
+( 0x20 == (( " " !first )) ) !print
+( 0x20 == (( "x" !first )) ) !print
+
+# in a pinch, you can use ; to separate expressions inside of parens -- ; is a no-op operator with an extreme precedence level
 
 'a' !print
 'f' !print

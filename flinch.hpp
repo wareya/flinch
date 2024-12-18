@@ -423,11 +423,11 @@ Program load_program(string text)
         
         while (i < program_texts.size() && program_texts[i] != ")")
         {
-            if (program_texts[i] == "(")
+            if (program_texts[i] == "(" || program_texts[i] == "((")
             {
-                for (int x = 0; i < program_texts.size() && (program_texts[i] == "(" || x); i++)
+                for (int x = 0; i < program_texts.size() && (x || program_texts[i] == "(" || program_texts[i] == "(("); i++)
                 {
-                    x += (program_texts[i] == "(") - (program_texts[i] == ")");
+                    x += (program_texts[i] == "(" || program_texts[i] == "((") - (program_texts[i] == ")" || program_texts[i] == "))");
                     nums.push_back(program_texts[i]);
                 }
             }
@@ -508,7 +508,7 @@ Program load_program(string text)
 
         if (token == "(")
             shunting_yard(i--);
-        else if (token == ";") { }
+        else if (token == "((" || token == "))" || token == ";") { }
         else if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});

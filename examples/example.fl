@@ -66,6 +66,7 @@ test !print
 test2 !print
 
 test ::! $test -> # assign a deep-cloned copy of test over itself
+# (note: deep cloning doesn't support cyclic objects and duplicates any multiply-referenced referents. it is a data clone, not a graph structure clone)
 0 $test 1 @ 1 @ ->
 test !print
 test2 !print

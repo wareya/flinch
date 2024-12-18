@@ -436,8 +436,7 @@ Program load_program(string text)
         {
             if (program_texts[i] == "(")
             {
-                nums.push_back(program_texts[i++]);
-                for (int x = 1; x && i < program_texts.size(); i++)
+                for (int x = 0; i < program_texts.size() && (program_texts[i] == "(" || x); i++)
                 {
                     x += (program_texts[i] == "(") - (program_texts[i] == ")");
                     nums.push_back(program_texts[i]);
@@ -456,7 +455,7 @@ Program load_program(string text)
         while (ops.size()) nums.push_back(vec_pop_back(ops));
         
         if (i >= program_texts.size())
-            throw std::runtime_error("Paren expression must end in a closing paren, i.e. ')', on or near line " + to_string(lines[start_i]));
+            throw std::runtime_error("Paren expression must end in a closing paren, i.e. ')', starting on or near line " + to_string(lines[start_i]));
         
         for (size_t j = 0; j < nums.size(); j++)
             program_texts[j + start_i] = nums[j];

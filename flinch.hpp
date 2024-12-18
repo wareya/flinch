@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <algorithm>
 
 #include <unordered_map>
 #include <initializer_list>
@@ -78,7 +79,6 @@ enum TKind : iword_t {
     AssignVar,
     Return,
     Call,
-    CallEval,
     
     IfGoto,
     IfGotoLabel,
@@ -122,6 +122,9 @@ enum TKind : iword_t {
     StringLitReference,
     
     BuiltinCall,
+    
+    Punt,
+    PuntN,
     
     Exit,
 };
@@ -463,10 +466,11 @@ Program load_program(string text)
     unordered_map<string, TKind> trivial_ops;
     
     trivial_ops.insert({"call", Call});
-    trivial_ops.insert({"call_eval", CallEval});
     trivial_ops.insert({"if_goto", IfGoto});
     trivial_ops.insert({"goto", Goto});
     trivial_ops.insert({"inc_goto_until", ForLoop});
+    trivial_ops.insert({"punt", Punt});
+    trivial_ops.insert({"punt_n", PuntN});
     
     trivial_ops.insert({"->", Assign});
     
@@ -770,7 +774,8 @@ int interpret(const Program & programdata)
     for (size_t i = 0; i < programdata.token_varnames.size(); i++)
         vars_default.push_back(0);
     
-    vector<pair<iword_t, bool>> callstack;
+    //vector<pair<iword_t, bool>> callstack;
+    vector<iword_t> callstack;
     vector<iword_t> fstack;
     vector<DynamicType> globals = vars_default;
     vector<vector<DynamicType>> varstacks;
@@ -852,7 +857,6 @@ int interpret(const Program & programdata)
             &&HandlerAssignVar,
             &&HandlerReturn,
             &&HandlerCall,
-            &&HandlerCallEval,
             
             &&HandlerIfGoto,
             &&HandlerIfGotoLabel,
@@ -897,6 +901,9 @@ int interpret(const Program & programdata)
             
             &&HandlerBuiltinCall,
             
+            &&HandlerPunt,
+            &&HandlerPuntN,
+            
             &&HandlerExit,
         };
         
@@ -928,17 +935,12 @@ int interpret(const Program & programdata)
         
         INTERPRETER_MIDCASE(FuncEnd)
             varstack = vec_pop_back(varstacks);
-            i = callstack.back().first;
-            bool is_eval = callstack.back().second;
+            i = callstack.back();
             callstack.pop_back();
-            if (is_eval) valpush(0); // functions return 0 by default
         INTERPRETER_MIDCASE(Return)
-            auto val = valpop();
             varstack = vec_pop_back(varstacks);
-            i = callstack.back().first;
-            bool is_eval = callstack.back().second;
+            i = callstack.back();
             callstack.pop_back();
-            if (is_eval) valpush(val);
         
         INTERPRETER_MIDCASE(LocalVarDec)
             varstack[n] = 0;
@@ -962,14 +964,8 @@ int interpret(const Program & programdata)
         
         INTERPRETER_MIDCASE(Call)
             Func f = valpop().as_func();
-            callstack.push_back({i, 0});
-            fstack.push_back(f.name);
-            varstacks.push_back(std::move(varstack));
-            varstack = vars_default;
-            i = f.loc;
-        INTERPRETER_MIDCASE(CallEval)
-            Func f = valpop().as_func();
-            callstack.push_back({i, 1});
+            //callstack.push_back({i, 0});
+            callstack.push_back(i);
             fstack.push_back(f.name);
             varstacks.push_back(std::move(varstack));
             varstack = vars_default;
@@ -1179,10 +1175,21 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(BuiltinCall)
             builtins[n](evalstack);
         
+        INTERPRETER_MIDCASE(Punt)
+            if (evalstacks.size() == 0) throw std::runtime_error("Tried to punt when only one evaluation stack was open");
+            evalstacks.back().push_back(valpop());
+            
+        INTERPRETER_MIDCASE(PuntN)
+            if (evalstacks.size() == 0) throw std::runtime_error("Tried to punt when only one evaluation stack was open");
+            size_t count = valpop().as_into_int();
+            for (size_t i = 0; i < count; i++)
+                evalstacks.back().push_back(valpop());
+            std::reverse(evalstacks.back().end() - count, evalstacks.back().end());
+        
         INTERPRETER_MIDCASE(Exit)
             goto INTERPRETER_EXIT;
-            INTERPRETER_ENDCASE()
-        
+            
+        INTERPRETER_ENDCASE()
         INTERPRETER_ENDDEF()
 
         INTERPRETER_EXIT: { }

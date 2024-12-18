@@ -10,9 +10,8 @@ f^
     x !print
     
     [ # opens a new evaluation stack (to protect us from badly-written functions)
-    x ^f2 call_eval # call f2 with argument x and evaluate return value onto stack
-    # using "call" instead would not evaluate return value onto stack
-    $x -> # assign call return value on stack into x
+    x ^f2 call # call f2 with argument x and evaluate return value onto stack
+    $x -> # assign call return value on stack into x. we could also punt it out into the outer evaluation stack instead.
     ]~ # closes the new evaluation stack
     
     y$
@@ -44,7 +43,7 @@ f2^
 
 ^^
 
-14 ^f call_eval
+14 ^f call !print
 
 [ 15 6 2052 ] $test$ -> # build an array with three elements
 
@@ -100,4 +99,11 @@ test $test 0 @ ->
 ( 0x20 == 'x' ) !print
 
 # array concatenation
+[ 3 1 4 ] [ 1 5 9 ] @@ !print
 ( [ 3 1 4 ] @@ [ 1 5 9 ] ) !print
+
+# punting
+[ [ 1 5 punt ] ] !print
+[ [ 1 5 punt punt ] ] !print
+[ [ 1 5 2 punt_n ] ] !print
+

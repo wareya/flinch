@@ -14,7 +14,7 @@ calc_pi^
     ( sum * 4.0 ) return
 ^^
 
-^calc_pi call_eval
+^calc_pi call
 
 $ret$ ->
 ret !print

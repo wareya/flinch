@@ -138,7 +138,7 @@ wareya@Toriaezu UCRT64 ~/dev/flinch
 $ time ./a.exe examples/too_simple_2_shunting.fl
 3.1415925535897915
 
-real    0m0.360s
+real    0m0.341s
 user    0m0.000s
 sys     0m0.000s
 ```

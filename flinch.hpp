@@ -18,7 +18,8 @@ template <typename T>
 T vec_pop_back(std::vector<T> & v)
 {
     T ret = std::move(v.back());
-    return v.pop_back(), ret;
+    v.pop_back();
+    return ret;
 }
 
 using namespace std;
@@ -586,10 +587,8 @@ Program load_program(string text)
         }
         else if (token.size() >= 2 && token[0] == '!')
         {
-            if (builtins_lookup.count(token.substr(1)))
-                program.push_back(make_token(BuiltinCall, builtins_lookup[token.substr(1)]));
-            else
-                throw runtime_error("Unknown built-in function: " + token.substr(1));
+            auto s = token.substr(1);
+            program.push_back(make_token(BuiltinCall, builtins_lookup(s)));
         }
         else
         {

@@ -50,11 +50,16 @@ void f_printstr(vector<DynamicType> & stack)
 
 typedef void(*builtin_func)(vector<DynamicType> &);
 
-builtin_func builtins[] = {
+const static builtin_func builtins[] = {
     f_print,
     f_printstr,
 };
-unordered_map<string, size_t> builtins_lookup = {
-    { "print", 0 },
-    { "printstr", 1 }
+static inline int builtins_lookup(const string & s)
+{
+    if (s == "print")
+        return 0;
+    else if (s == "printstr")
+        return 1;
+    else
+        throw runtime_error("Unknown built-in function: " + s);
 };

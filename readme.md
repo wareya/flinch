@@ -22,7 +22,7 @@ Pi calculation with shunting yard expressions:
 calc_pi^
     ( 0.0 -> $sum$ )
     ( -1.0 -> $flip$ )
-    ( 0 -> $i$ )
+    ( 0 -> $i$ ) # note: newly-declared variables contain 0 by default. this assignment is only for clarity
     
     :loopend goto loopstart:
         ( -1.0 *= $flip )

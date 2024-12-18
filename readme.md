@@ -4,6 +4,8 @@ Flinch is a super ultra-lightweight scripting language (**under 1000 lines of co
 
 Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`). A consequence of this is that no parsing is needed and expressions can be evaluated by the same machinery that's responsible for control flow. Rather than using blocks and structured branches, Flinch exposes labels and direct jumps (`goto`, `if_goto`), which makes it much easier to implement.
 
+To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
+
 ## Examples
 
 Hello world:
@@ -12,7 +14,7 @@ Hello world:
 "Hello, world!"& !printstr
 ```
 
-Pi calculation with shunting yard expressions (Flinch has an optional infix expression unrolling system):
+Pi calculation with shunting yard expressions:
 
 ```R
 calc_pi^

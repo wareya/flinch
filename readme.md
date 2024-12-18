@@ -90,6 +90,21 @@ In shunting yard expressions, `((` temporarily disables and `))` re-enables the 
 
 Shunting-yard-related parens (i.e. `(`, `((`, `)`, `))` parens) follow nesting rules.
 
+## Source code size
+
+`main.cpp` is an example of how to integrate `flinch.hpp` into a project. `builtins.hpp` is standard library functionality and is however long as you want it to be; you could delete everything from it if you wanted to. `flinch.hpp` is the actual language implementation, and at time of writing, is sized like:
+
+```
+$ tokei flinch.hpp
+===============================================================================
+ Language            Files        Lines         Code     Comments       Blanks
+===============================================================================
+ C++ Header              1         1197          997           19          181
+===============================================================================
+ Total                   1         1197          997           19          181
+===============================================================================
+```
+
 ## License
 
 CC0 (only applies to `main.cpp`, `builtins.hpp`, `flinch.hpp`, and the files under `examples`).

@@ -245,7 +245,8 @@ struct DynamicType {
     {
         while (is_ref()) *this = *as_ref().ref();
         if (!is_array()) return *this;
-        as_array().items() = make_shared<vector<DynamicType>>(*as_array().items());
+        auto t = make_shared<vector<DynamicType>>(*as_array().items());
+        as_array()._items = make_shared<shared_ptr<vector<DynamicType>>>(t);
         if (!deep) return *this;
         for (auto & item : *as_array().items()) item = item.clone(deep);
         return *this;

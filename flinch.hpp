@@ -748,7 +748,7 @@ Program load_program(string text)
     }
     
     return {program, lines, funcs};
-}
+} /// trivial_ops
 
 int interpret(const Program & programdata)
 {
@@ -1172,7 +1172,6 @@ int interpret(const Program & programdata)
                 a = &v.as_ref().ref->as_array();
             else
                 throw std::runtime_error("Tried to index into a non-array value");
-            auto ret = (*a->items)[i];
             a->items->insert(a->items->begin() + i, inval);
         
         INTERPRETER_MIDCASE(StringLiteral)

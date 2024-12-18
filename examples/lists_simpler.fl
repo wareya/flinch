@@ -9,10 +9,10 @@ $b !print
 $i$
 
 :loopend goto loopstart:
-    i a @? >= :doit if_goto
-    a i @ b 0 @ <= :nextiter if_goto
+    ( i >= a @? ) :doit if_goto
+    ( a @ i <= b @ 0 ) :nextiter if_goto
 
-    doit: $a i b 0 @- @+
+    doit: ( $a i ( b @- 0 ) @+ )
     
     nextiter: 1 $i +=
 loopend: $b @? 0 > :loopstart if_goto

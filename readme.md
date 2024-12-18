@@ -122,7 +122,7 @@ wareya@Toriaezu UCRT64 ~/dev/flinch
 $ time ./etc/too_simple.lua
 0 3.1415925535897915
 
-real    0m0.163s
+real    0m0.162s
 user    0m0.000s
 sys     0m0.000s
 
@@ -130,7 +130,7 @@ wareya@Toriaezu UCRT64 ~/dev/flinch
 $ time ./etc/too_simple.py
 0 3.1415925535897915
 
-real    0m1.372s
+real    0m1.354s
 user    0m0.000s
 sys     0m0.015s
 
@@ -138,7 +138,7 @@ wareya@Toriaezu UCRT64 ~/dev/flinch
 $ time ./a.exe examples/too_simple_2_shunting.fl
 3.1415925535897915
 
-real    0m0.341s
+real    0m0.339s
 user    0m0.000s
 sys     0m0.000s
 ```

@@ -457,7 +457,7 @@ Program load_program(string text)
         for (size_t j = 0; j < nums.size(); j++)
             program_texts[j + start_i] = nums[j];
         program_texts.erase(program_texts.begin() + i);
-        lines.erase(program_texts.begin() + i);
+        lines.erase(lines.begin() + i);
     };
     
     unordered_map<string, TKind> trivial_ops;
@@ -519,7 +519,7 @@ Program load_program(string text)
         if (token == "(")
             shunting_yard(i--);
         else if (token == "((" || token == "))" || token == ";")
-            lines.erase(i);
+            lines.erase(lines.begin() + i);
         else if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});

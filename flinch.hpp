@@ -423,11 +423,11 @@ Program load_program(string text)
         
         while (i < program_texts.size() && program_texts[i] != ")")
         {
-            if (program_texts[i] == "(" || program_texts[i] == "((")
+            if (program_texts[i] == string("(" )|| program_texts[i] == string("(("))
             {
-                for (int x = 0; i < program_texts.size() && (x || program_texts[i] == "(" || program_texts[i] == "(("); i++)
+                for (int x = 0; i < program_texts.size() && (x || program_texts[i] == string("(") || program_texts[i] == string("((")); i++)
                 {
-                    x += (program_texts[i] == "(" || program_texts[i] == "((") - (program_texts[i] == ")" || program_texts[i] == "))");
+                    x += (program_texts[i] == string("(" )|| program_texts[i] == string("((")) - (program_texts[i] == string(")") || program_texts[i] == string("))"));
                     nums.push_back(program_texts[i]);
                 }
             }

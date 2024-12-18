@@ -70,6 +70,10 @@ test ::! $test -> # assign a deep-cloned copy of test over itself
 test !print
 test2 !print
 
+
+test $test 0 @ ->
+#test ::! # crashes: cyclic array self-reference
+
 # char evaluation: "a" !first
 
 "asdf" !first !print

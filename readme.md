@@ -1,6 +1,6 @@
 # Flinch
 
-Flinch is a super ultra-lightweight scripting language, faster than python but slower than lua, designed to be as easy to implement as possible while still having enough functionality to be theoretically usable for "real programming".
+Flinch is a super ultra-lightweight scripting language (**under 1000 lines of code**), faster than python but slower than lua, designed to be as easy to implement as possible while still having enough functionality to be theoretically usable for "real programming".
 
 Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`). A consequence of this is that no parsing is needed and expressions can be evaluated by the same machinery that's responsible for control flow. Rather than using blocks and structured branches, Flinch exposes labels and direct jumps (`goto`, `if_goto`), which makes it much easier to implement.
 

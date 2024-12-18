@@ -110,7 +110,7 @@ enum TKind : iword_t {
     ArrayBuild,
     ArrayIndex,
     Clone,
-    //CloneDeep,
+    CloneDeep,
     
     ArrayLen,
     ArrayLenMinusOne,
@@ -148,10 +148,7 @@ TOKEN_LOG(varname, string)
 TOKEN_LOG(int, int64_t)
 TOKEN_LOG(double, double)
 
-struct Token {
-    TKind kind;
-    iword_t n, extra_1, extra_2;
-};
+struct Token { TKind kind; iword_t n, extra_1, extra_2; };
 
 Token make_token(TKind kind, iword_t n)
 {
@@ -225,8 +222,7 @@ struct DynamicType {
     #define AS_TYPE_X(TYPE, TYPENAME)\
     TYPE & as_##TYPENAME()\
     {\
-        if (std::holds_alternative<TYPE>(value))\
-            return std::get<TYPE>(value);\
+        if (std::holds_alternative<TYPE>(value)) return std::get<TYPE>(value);\
         throw std::runtime_error("Value is not of type " #TYPENAME);\
     }
     
@@ -253,11 +249,19 @@ struct DynamicType {
     
     explicit operator bool() const
     {
-        if (std::holds_alternative<int64_t>(value))
-            return !!std::get<int64_t>(value);
-        else if (std::holds_alternative<double>(value))
-            return !!std::get<double>(value);
+        if (std::holds_alternative<int64_t>(value)) return !!std::get<int64_t>(value);
+        else if (std::holds_alternative<double>(value)) return !!std::get<double>(value);
         return true;
+    }
+    
+    DynamicType clone(bool deep)
+    {
+        if (is_ref()) *this = *as_ref().ref;
+        if (!is_array()) return *this;
+        as_array().items = make_shared<vector<DynamicType>>(*as_array().items);
+        if (!deep) return *this;
+        for (auto & item : *as_array().items) item = item.clone(deep);
+        return *this;
     }
 };
 
@@ -351,13 +355,10 @@ Program load_program(string text)
     
     auto isint = [&](const std::string& str) {
         if (str.empty()) return false;
-        
         for (size_t i = (str[0] == '+' || str[0] == '-'); i < str.length(); i++)
         {
-            if (!std::isdigit(str[i]))
-                return false;
+            if (!std::isdigit(str[i])) return false;
         }
-        
         return true;
     };
     auto isfloat = [&](const string& str) {
@@ -367,10 +368,8 @@ Program load_program(string text)
             stod(str);
             return true;
         }
-        catch (...)
-        {
-            return false;
-        }
+        catch (...) { }
+        return false;
     };
     
     auto isname = [&](const string& str) {
@@ -495,7 +494,7 @@ Program load_program(string text)
     trivial_ops.insert({">", CmpGT});
     
     trivial_ops.insert({"::", Clone});
-    //trivial_ops.insert({"::!", CloneDeep});
+    trivial_ops.insert({"::!", CloneDeep});
     
     trivial_ops.insert({"@", ArrayIndex});
     trivial_ops.insert({"@?", ArrayLen});
@@ -555,9 +554,9 @@ Program load_program(string text)
             else
                 throw std::runtime_error("Undefined variable " + s + " on line " + std::to_string(lines[i]));
         }
-        else if (token.front() == ':' && token.size() >= 2 && token != "::")
+        else if (token.front() == ':' && token.size() >= 2 && token != "::" && token != "::!")
             program.push_back(make_token(LabelLookup, get_token_string_num(token.substr(1))));
-        else if (token.back() == ':' && token.size() >= 2 && token != "::")
+        else if (token.back() == ':' && token.size() >= 2 && token != "::" && token != "::!")
             program.push_back(make_token(LabelDec, get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
             program.push_back(make_token(trivial_ops[token], 0));
@@ -875,7 +874,7 @@ int interpret(const Program & programdata)
             &&HandlerArrayBuild,
             &&HandlerArrayIndex,
             &&HandlerClone,
-            //&&HandlerCloneDeep,
+            &&HandlerCloneDeep,
             
             &&HandlerArrayLen,
             &&HandlerArrayLenMinusOne,
@@ -1120,11 +1119,10 @@ int interpret(const Program & programdata)
                 throw std::runtime_error("Tried to index into a non-array value");
         
         INTERPRETER_MIDCASE(Clone)
-            auto v = valpop();
-            if (v.is_ref())
-                v = *v.as_ref().ref;
-            if (v.is_array())
-                v.as_array().items = make_shared<vector<DynamicType>>(*v.as_array().items);
+            auto v = valpop().clone(false);
+            valpush(v);
+        INTERPRETER_MIDCASE(CloneDeep)
+            auto v = valpop().clone(true);
             valpush(v);
         
         INTERPRETER_MIDCASE(ArrayLen)
@@ -1188,12 +1186,6 @@ int interpret(const Program & programdata)
         INTERPRETER_ENDDEF()
 
         INTERPRETER_EXIT: { }
-        
-        //printf("done! (token %d)\n", i);
-        //printf("done!\n");
-        //for (auto val : evalstack)
-        //    printf("%.17g ", (val.is_int() ? val.as_int() : val.is_double() ? val.as_double() : (0.0/0.0)));
-        //puts("");
     }
     catch (const exception& e)
     {

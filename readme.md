@@ -6,7 +6,7 @@ Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`
 
 To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
 
-\*: on microbenchmarks, \~30% the runtime of python 3, but 2\~3x the runtime of lua
+\*: Measured compiled with `clang++ -O3`, not GCC, running microbenchmarks: \~30% the runtime of python 3, 2\~3x the runtime of lua
 
 ## Examples
 

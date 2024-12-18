@@ -1,8 +1,5 @@
 
 // built-in function definitions. customize however you want!
-// also search for:
-// ->>> BUILTINS <<<-
-// in flinch.cpp and modify the if-else chain appropriately
 
 void f_print_inner(DynamicType * val, const char * eol = "\n")
 {
@@ -56,4 +53,8 @@ typedef void(*builtin_func)(vector<DynamicType> &);
 builtin_func builtins[] = {
     f_print,
     f_printstr,
+};
+unordered_map<string, size_t> builtins_lookup = {
+    { "print", 0 },
+    { "printstr", 1 }
 };

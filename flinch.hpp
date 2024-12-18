@@ -586,14 +586,10 @@ Program load_program(string text)
         }
         else if (token.size() >= 2 && token[0] == '!')
         {
-            auto s = token.substr(1);
-            // ->>> BUILTINS <<<-
-            if (s == "print")
-                program.push_back(make_token(BuiltinCall, 0));
-            else if (s == "printstr")
-                program.push_back(make_token(BuiltinCall, 1));
+            if (builtins_lookup.count(token.substr(1)))
+                program.push_back(make_token(BuiltinCall, builtins_lookup[token.substr(1)]));
             else
-                throw runtime_error("Unknown built-in function: " + token);
+                throw runtime_error("Unknown built-in function: " + token.substr(1));
         }
         else
         {

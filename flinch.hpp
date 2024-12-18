@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <algorithm>
 
 #include <unordered_map>
 #include <initializer_list>
@@ -128,17 +129,40 @@ enum TKind : iword_t {
 
 struct Token { TKind kind; iword_t n, extra_1, extra_2; };
 struct Func { iword_t loc, len, name; };
-
-Token make_token(TKind kind, iword_t n)
-{
-    return {kind, n, 0, 0};
-}
+Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
-struct Ref { DynamicType * ref; };
+#ifdef MEMORY_SAFE_REFERENCES
+struct Ref {
+    shared_ptr<vector<DynamicType>> backing;
+    DynamicType * refdata;
+    DynamicType * ref() { return refdata; }
+};
+inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{backing, &(*backing)[i]}; }
+#else // MEMORY_SAFE_REFERENCES
+struct Ref {
+    DynamicType * refdata;
+    DynamicType * ref() { return refdata; }
+};
+inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{&(*backing)[i]}; }
+#endif // MEMORY_SAFE_REFERENCES
 
 struct Label { int loc; };
-struct Array { shared_ptr<vector<DynamicType>> items; };
+struct Array {
+    //shared_ptr<vector<DynamicType>> _items;
+    //shared_ptr<vector<DynamicType>> & items() { return _items; }
+    shared_ptr<shared_ptr<vector<DynamicType>>> _items;
+    shared_ptr<vector<DynamicType>> & items() { return *_items; }
+    void dirtify()
+    {
+        if (_items->unique()) return;
+        *_items = make_shared<vector<DynamicType>>(**_items);
+    }
+};
+inline Array make_array(shared_ptr<vector<DynamicType>> && backing)
+{
+    return Array { make_shared<shared_ptr<vector<DynamicType>>>(backing) };
+}
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -228,8 +252,8 @@ struct DynamicType {
     {
         if (is_array())
             return &as_array();
-        else if (is_ref() && as_ref().ref->is_array())
-            return &as_ref().ref->as_array();
+        else if (is_ref() && as_ref().ref()->is_array())
+            return &as_ref().ref()->as_array();
         else
             throw std::runtime_error("Tried to use a non-array value as an array");
     }
@@ -243,11 +267,11 @@ struct DynamicType {
     
     DynamicType clone(bool deep)
     {
-        if (is_ref()) *this = *as_ref().ref;
+        while (is_ref()) *this = *as_ref().ref();
         if (!is_array()) return *this;
-        as_array().items = make_shared<vector<DynamicType>>(*as_array().items);
+        as_array().items() = make_shared<vector<DynamicType>>(*as_array().items());
         if (!deep) return *this;
-        for (auto & item : *as_array().items) item = item.clone(deep);
+        for (auto & item : *as_array().items()) item = item.clone(deep);
         return *this;
     }
 };
@@ -397,19 +421,11 @@ Program load_program(string text)
     
     auto var_is_local = [&](string & s) {
         if (var_defs.size() == 1) return false;
-        for (size_t i = 0; i < var_defs.back().size(); i++)
-        {
-            if (var_defs.back()[i] == s) return true;
-        }
-        return false;
+        return std::find(var_defs.back().begin(), var_defs.back().end(), s) != var_defs.back().end();
     };
     
     auto var_is_global = [&](string & s) {
-        for (size_t i = 0; i < var_defs[0].size(); i++)
-        {
-            if (var_defs[0][i] == s) return true;
-        }
-        return false;
+        return std::find(var_defs[0].begin(), var_defs[0].end(), s) != var_defs[0].end();
     };
     
     auto shunting_yard = [&](size_t i) {
@@ -457,7 +473,7 @@ Program load_program(string text)
         for (size_t j = 0; j < nums.size(); j++)
             program_texts[j + start_i] = nums[j];
         program_texts.erase(program_texts.begin() + i);
-        lines.erase(program_texts.begin() + i);
+        lines.erase(lines.begin() + i);
     };
     
     unordered_map<string, TKind> trivial_ops;
@@ -519,7 +535,7 @@ Program load_program(string text)
         if (token == "(")
             shunting_yard(i--);
         else if (token == "((" || token == "))" || token == ";")
-            lines.erase(i);
+            lines.erase(lines.begin() + i);
         else if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});
@@ -772,17 +788,22 @@ int interpret(const Program & programdata)
     
     vector<pair<iword_t, bool>> callstack;
     vector<iword_t> fstack;
-    vector<DynamicType> globals = vars_default;
-    vector<vector<DynamicType>> varstacks;
-    vector<DynamicType> varstack;
+    
+    auto globals = make_shared<vector<DynamicType>>(vars_default);
+    auto globals_raw = globals->data();
+    
+    vector<shared_ptr<vector<DynamicType>>> varstacks;
+    auto varstack = make_shared<vector<DynamicType>>(vars_default);
+    auto varstack_raw = varstack->data();
+    
     vector<vector<DynamicType>> evalstacks;
     vector<DynamicType> evalstack;
     
     fstack.push_back(0);
     
     auto valpush = [&](DynamicType x) { evalstack.push_back(x); };
-    
     auto valpop = [&]() { return vec_pop_back(evalstack); };
+    auto valmap = [&](auto f) { f(evalstack.at(evalstack.size()-1)); };
     
     int i = 0;
     try
@@ -928,6 +949,7 @@ int interpret(const Program & programdata)
         
         INTERPRETER_MIDCASE(FuncEnd)
             varstack = vec_pop_back(varstacks);
+            varstack_raw = varstack->data();
             i = callstack.back().first;
             bool is_eval = callstack.back().second;
             callstack.pop_back();
@@ -935,25 +957,26 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(Return)
             auto val = valpop();
             varstack = vec_pop_back(varstacks);
+            varstack_raw = varstack->data();
             i = callstack.back().first;
             bool is_eval = callstack.back().second;
             callstack.pop_back();
             if (is_eval) valpush(val);
         
         INTERPRETER_MIDCASE(LocalVarDec)
-            varstack[n] = 0;
+            varstack_raw[n] = 0;
         INTERPRETER_MIDCASE(LocalVarLookup)
-            valpush(Ref{&varstack[n]});
+            valpush(make_ref(varstack, n));
         INTERPRETER_MIDCASE(LocalVarDecLookup)
-            varstack[n] = 0;
-            valpush(Ref{&varstack[n]});
+            varstack_raw[n] = 0;
+            valpush(make_ref(varstack, n));
         INTERPRETER_MIDCASE(GlobalVarDec)
-            globals[n] = 0;
+            globals_raw[n] = 0;
         INTERPRETER_MIDCASE(GlobalVarLookup)
-            valpush(Ref{&globals[n]});
+            valpush(make_ref(globals, n));
         INTERPRETER_MIDCASE(GlobalVarDecLookup)
-            globals[n] = 0;
-            valpush(Ref{&globals[n]});
+            globals_raw[n] = 0;
+            valpush(make_ref(globals, n));
         
         INTERPRETER_MIDCASE(LabelLookup)
             valpush(Label{(int)n});
@@ -964,25 +987,27 @@ int interpret(const Program & programdata)
             Func f = valpop().as_func();
             callstack.push_back({i, 0});
             fstack.push_back(f.name);
-            varstacks.push_back(std::move(varstack));
-            varstack = vars_default;
+            varstacks.push_back(varstack);
+            varstack = make_shared<vector<DynamicType>>(vars_default);
+            varstack_raw = varstack->data();
             i = f.loc;
         INTERPRETER_MIDCASE(CallEval)
             Func f = valpop().as_func();
             callstack.push_back({i, 1});
             fstack.push_back(f.name);
-            varstacks.push_back(std::move(varstack));
-            varstack = vars_default;
+            varstacks.push_back(varstack);
+            varstack = make_shared<vector<DynamicType>>(vars_default);
+            varstack_raw = varstack->data();
             i = f.loc;
         
         INTERPRETER_MIDCASE(Assign)
-            Ref ref = valpop().as_ref();
+            Ref ref = std::move(valpop().as_ref());
             auto val = valpop();
-            *ref.ref = val;
+            *ref.ref() = val;
         
         INTERPRETER_MIDCASE(AssignVar)
             auto val = valpop();
-            varstack[n] = val;
+            varstack_raw[n] = val;
         
         INTERPRETER_MIDCASE(ScopeOpen)
             evalstacks.push_back(std::move(evalstack));
@@ -1001,22 +1026,23 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(ForLoop)
             Label dest = valpop().as_label();
             auto num = valpop();
-            auto ref = valpop().as_ref();
-            if (!num.is_int() || !ref.ref->is_int())
+            auto ref = std::move(valpop().as_ref());
+            if (!num.is_int() || !ref.ref()->is_int())
                 throw std::runtime_error("Tried to use for loop with non-integer");
-            *ref.ref = *ref.ref + 1;
-            if (*ref.ref <= num)
+            *ref.ref() = *ref.ref() + 1;
+            if (*ref.ref() <= num)
                 i = dest.loc;
         INTERPRETER_MIDCASE(ForLoopLabel)
             auto num = valpop();
-            auto ref = valpop().as_ref();
-            if (!num.is_int() || !ref.ref->is_int())
+            auto ref = std::move(valpop().as_ref());
+            if (!num.is_int() || !ref.ref()->is_int())
                 throw std::runtime_error("Tried to use for loop with non-integer");
-            *ref.ref = (*ref.ref) + 1;
-            if (*ref.ref <= num)
+            *ref.ref() = (*ref.ref()) + 1;
+            if (*ref.ref() <= num)
                 i = n;
         INTERPRETER_MIDCASE(ForLoopFull)
-            auto & _v = varstack[program[i-1].extra_1];
+            // FIXME: add a global version
+            auto & _v = varstack_raw[program[i-1].extra_1];
             if (!_v.is_int())
                 throw std::runtime_error("Tried to use for loop with non-integer");
             auto & v = _v.as_int();
@@ -1051,9 +1077,9 @@ int interpret(const Program & programdata)
         
         #define INTERPRETER_MIDCASE_UNARY_ASSIGN(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
-            Ref ref = valpop().as_ref();\
+            Ref ref = std::move(valpop().as_ref());\
             auto a = valpop();\
-            *ref.ref = *ref.ref OP a;
+            *ref.ref() = *ref.ref() OP a;
         
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Add, +)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Sub, -)
@@ -1102,61 +1128,50 @@ int interpret(const Program & programdata)
             valpush(programdata.get_token_double(n));
         
         INTERPRETER_MIDCASE(LocalVar)
-            valpush(varstack[n]);
+            valpush(varstack_raw[n]);
         
         INTERPRETER_MIDCASE(GlobalVar)
-            valpush(globals[n]);
+            valpush(globals_raw[n]);
         
         INTERPRETER_MIDCASE(ArrayBuild)
             auto back = std::move(evalstack);
             evalstack = vec_pop_back(evalstacks);
-            valpush(Array{std::make_shared<vector<DynamicType>>(std::move(back))});
+            valpush(make_array(std::make_shared<vector<DynamicType>>(std::move(back))));
         
         INTERPRETER_MIDCASE(ArrayIndex)
             auto i = valpop().as_into_int();
-            auto a = valpop();
-            if (a.is_array())
-            {
-                auto v = (*a.as_array().items)[i];
-                valpush(v);
-            }
-            else if (a.is_ref() && a.as_ref().ref->is_array())
-            {
-                auto * a2 = &a.as_ref().ref->as_array();
-                auto * v = &(*a2->items)[i]; // FIXME holding on to pointers into the inside of arrays is extremely unsafe
-                valpush({Ref{v}});
-            }
+            auto val = valpop();
+            auto a = val.as_array_ptr_thru_ref();
+            
+            if (val.is_array())
+                valpush((*a->items())[i]);
             else
-                throw std::runtime_error("Tried to index into a non-array value");
+                valpush({make_ref(a->items(), (size_t)i)});
         
         INTERPRETER_MIDCASE(Clone)
-            auto v = valpop().clone(false);
-            valpush(v);
+            valmap([](auto & x) { x = x.clone(false); });
         INTERPRETER_MIDCASE(CloneDeep)
-            auto v = valpop().clone(true);
-            valpush(v);
+            valmap([](auto & x) { x = x.clone(true); });
         
         INTERPRETER_MIDCASE(ArrayLen)
-            auto a = valpop();
-            valpush((int64_t)a.as_array_ptr_thru_ref()->items->size());
+            valmap([](auto & a) { a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size()); });
         
         INTERPRETER_MIDCASE(ArrayLenMinusOne)
-            auto a = valpop();
-            valpush((int64_t)a.as_array_ptr_thru_ref()->items->size() - 1);
+            valmap([](auto & a) { a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1); });
         
         INTERPRETER_MIDCASE(ArrayPushIn)
             auto inval = valpop();
             auto i = valpop().as_into_int();
             auto v = valpop();
             Array * a = v.as_array_ptr_thru_ref();
-            a->items->insert(a->items->begin() + i, inval);
+            a->items()->insert(a->items()->begin() + i, inval);
         
         INTERPRETER_MIDCASE(ArrayPopOut)
             auto i = valpop().as_into_int();
             auto v = valpop();
             Array * a = v.as_array_ptr_thru_ref();
-            auto ret = (*a->items)[i];
-            a->items->erase(a->items->begin() + i);
+            auto ret = (*a->items())[i];
+            a->items()->erase(a->items()->begin() + i);
             valpush(ret);
         
         INTERPRETER_MIDCASE(ArrayConcat)
@@ -1164,17 +1179,17 @@ int interpret(const Program & programdata)
             Array * ar = vr.as_array_ptr_thru_ref();
             auto vl = valpop();
             Array * al = vl.as_array_ptr_thru_ref();
-            Array newarray{std::make_shared<vector<DynamicType>>()};
+            auto newarray = make_array(std::make_shared<vector<DynamicType>>());
             
-            newarray.items->insert(newarray.items->end(), al->items->begin(), al->items->end());
-            newarray.items->insert(newarray.items->end(), ar->items->begin(), ar->items->end());
+            newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
+            newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
             valpush(newarray);
         
         INTERPRETER_MIDCASE(StringLiteral)
-            valpush(Array{std::make_shared<vector<DynamicType>>(programdata.get_token_stringval(n))});
+            valpush(make_array(std::make_shared<vector<DynamicType>>(programdata.get_token_stringval(n))));
         
         INTERPRETER_MIDCASE(StringLitReference)
-            valpush(Array{programdata.get_token_stringref(n)});
+            valpush(make_array(programdata.get_token_stringref(n)));
         
         INTERPRETER_MIDCASE(BuiltinCall)
             builtins[n](evalstack);

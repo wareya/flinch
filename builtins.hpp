@@ -4,7 +4,7 @@
 void f_print_inner(DynamicType * val, const char * eol = "\n")
 {
     if (val->is_ref())
-        return f_print_inner(val->as_ref().ref, eol);
+        return f_print_inner(val->as_ref().ref(), eol);
     
     if (val->is_int())         printf("%zd%s", val->as_int(), eol);
     else if (val->is_double()) printf("%.17g%s", val->as_double(), eol);
@@ -14,7 +14,7 @@ void f_print_inner(DynamicType * val, const char * eol = "\n")
     else if (val->is_array())
     {
         printf("[");
-        auto & list = *val->as_array().items;
+        auto & list = *val->as_array().items();
         for (size_t i = 0; i < list.size(); i++)
         {
             if (i != 0) printf(", ");
@@ -36,11 +36,11 @@ void f_printstr(vector<DynamicType> & stack)
     Array * a;
     if (v.is_array())
         a = &v.as_array();
-    else if (v.is_ref() && v.as_ref().ref->is_array())
-        a = &v.as_ref().ref->as_array();
+    else if (v.is_ref() && v.as_ref().ref()->is_array())
+        a = &v.as_ref().ref()->as_array();
     else
         return;
-    for (auto n : *a->items)
+    for (auto n : *a->items())
     {
         if (n.is_int())
             printf("%c", (char)n.as_int());
@@ -53,11 +53,11 @@ void f_first(vector<DynamicType> & stack)
     Array * a;
     if (v.is_array())
         a = &v.as_array();
-    else if (v.is_ref() && v.as_ref().ref->is_array())
-        a = &v.as_ref().ref->as_array();
+    else if (v.is_ref() && v.as_ref().ref()->is_array())
+        a = &v.as_ref().ref()->as_array();
     else
         throw std::runtime_error("Tried to index into a non-array value");
-    stack.push_back((*a->items)[0]);
+    stack.push_back((*a->items())[0]);
 }
 void f_last(vector<DynamicType> & stack)
 {
@@ -65,11 +65,11 @@ void f_last(vector<DynamicType> & stack)
     Array * a;
     if (v.is_array())
         a = &v.as_array();
-    else if (v.is_ref() && v.as_ref().ref->is_array())
-        a = &v.as_ref().ref->as_array();
+    else if (v.is_ref() && v.as_ref().ref()->is_array())
+        a = &v.as_ref().ref()->as_array();
     else
         throw std::runtime_error("Tried to index into a non-array value");
-    stack.push_back((*a->items).back());
+    stack.push_back((*a->items()).back());
 }
 
 //typedef void(*builtin_func)(vector<DynamicType> &);

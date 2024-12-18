@@ -85,7 +85,7 @@ A: Practically, no. But like if you're going to throw a scripting language into 
 
 #### Q: Is this memory safe?
 
-A: This implementation is not memory safe with regards to "Location"/`Ref` values; they're capable of living past their backing dynamic array. This is not a language design limitation, I'm just lazy, and fixing it to be safe at the cost of a bit of performance would not be too much work. Aside from that, generally memory-safe programming practices are followed; raw pointers are avoided or only held temporarily while their referents are definitely still alive.
+A: If you compile with MEMORY_SAFE_REFERENCES defined, yes! However on microbenchmarks this is more than 100% slower (more than 2x the runtime), so it's left as an option instead of being mandatory.
 
 ## Shunting Yard
 

@@ -113,6 +113,36 @@ static void(* const builtins [])(vector<DynamicType> &) = { 0 };
 static inline int builtins_lookup(const string & s) { throw runtime_error("Unknown built-in function: " + s); };
 ```
 
+## Speed
+
+Using the "too simple" pi calculation benchmark (with fewer iterations than the benchmark game does):
+
+```
+wareya@Toriaezu UCRT64 ~/dev/flinch
+$ time ./etc/too_simple.lua
+0 3.1415925535897915
+
+real    0m0.163s
+user    0m0.000s
+sys     0m0.000s
+
+wareya@Toriaezu UCRT64 ~/dev/flinch
+$ time ./etc/too_simple.py
+0 3.1415925535897915
+
+real    0m1.372s
+user    0m0.000s
+sys     0m0.015s
+
+wareya@Toriaezu UCRT64 ~/dev/flinch
+$ time ./a.exe examples/too_simple_2_shunting.fl
+3.1415925535897915
+
+real    0m0.360s
+user    0m0.000s
+sys     0m0.000s
+```
+
 ## License
 
 CC0 (only applies to `main.cpp`, `builtins.hpp`, `flinch.hpp`, and the files under `examples`).

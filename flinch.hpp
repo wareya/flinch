@@ -594,13 +594,14 @@ Program load_program(string text)
         {
             if (isint(token))
             {
+                int sbits = (sizeof(iword_t)*8-1);
                 int64_t num = stoll(token);
-                int64_t num2_smol = num / 10000;
-                int64_t num2 = num2_smol * 10000;
-                int64_t num3_smol = num >> 15;
-                int64_t num3 = num3_smol << 15;
+                int64_t num2_smol = num  / (sbits == 15 ? 10000 : sbits == 31 ? 1000000000 : sbits == 63 ? 1 : 50);
+                int64_t num2 = num2_smol * (sbits == 15 ? 10000 : sbits == 31 ? 1000000000 : sbits == 63 ? 1 : 50);
+                int64_t num3_smol = num >> sbits;
+                int64_t num3 = num3_smol << sbits;
                 
-                int64_t d = (int64_t)1 << (sizeof(iword_t)*8-1);
+                int64_t d = (int64_t)1 << sbits;
                 int64_t dhi = d-1;
                 int64_t dlo = -d;
                 

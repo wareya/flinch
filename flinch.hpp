@@ -53,27 +53,12 @@ enum TKind : iword_t {
     Double,
     DoubleInline,
     
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
+    Add, Sub, Mul, Div, Mod,
+    AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
     
-    AddAssign,
-    SubAssign,
-    MulAssign,
-    DivAssign,
-    ModAssign,
-    
-    And,
-    Or,
-    Xor,
-    
-    Shl,
-    Shr,
-    
-    BoolAnd,
-    BoolOr,
+    And, Or, Xor,
+    Shl, Shr,
+    BoolAnd, BoolOr,
     
     Assign,
     AssignVar,
@@ -84,12 +69,7 @@ enum TKind : iword_t {
     IfGoto,
     IfGotoLabel,
     
-    IfGotoLabelEQ,
-    IfGotoLabelNE,
-    IfGotoLabelLE,
-    IfGotoLabelGE,
-    IfGotoLabelLT,
-    IfGotoLabelGT,
+    IfGotoLabelEQ, IfGotoLabelNE, IfGotoLabelLE, IfGotoLabelGE, IfGotoLabelLT, IfGotoLabelGT,
     
     Goto,
     GotoLabel,
@@ -101,12 +81,7 @@ enum TKind : iword_t {
     ScopeOpen,
     ScopeClose,
     
-    CmpEQ,
-    CmpNE,
-    CmpLE,
-    CmpGE,
-    CmpLT,
-    CmpGT,
+    CmpEQ, CmpNE, CmpLE, CmpGE, CmpLT, CmpGT,
     
     ArrayBuild,
     ArrayIndex,
@@ -134,30 +109,29 @@ Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 struct DynamicType;
 #ifdef MEMORY_SAFE_REFERENCES
 struct Ref {
+    // this backing vector will never be resized or reallocated, so it's OK to store a pointer directly into it
     shared_ptr<vector<DynamicType>> backing;
     DynamicType * refdata;
     DynamicType * ref() { return refdata; }
 };
-inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{backing, &(*backing)[i]}; }
+inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{backing, &(*backing).at(i)}; }
 #else // MEMORY_SAFE_REFERENCES
 struct Ref {
     DynamicType * refdata;
     DynamicType * ref() { return refdata; }
 };
-inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{&(*backing)[i]}; }
+inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{&(*backing).at(i)}; }
 #endif // MEMORY_SAFE_REFERENCES
 
 struct Label { int loc; };
 struct Array {
-    //shared_ptr<vector<DynamicType>> _items;
-    //shared_ptr<vector<DynamicType>> & items() { return _items; }
     shared_ptr<shared_ptr<vector<DynamicType>>> _items;
     shared_ptr<vector<DynamicType>> & items() { return *_items; }
-    void dirtify()
-    {
-        if (_items->unique()) return;
-        *_items = make_shared<vector<DynamicType>>(**_items);
-    }
+    // dirtify is called whenever doing anything that might resize the array
+    // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
+    // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
+    // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
+    void dirtify() { if (!_items->unique()) *_items = make_shared<vector<DynamicType>>(**_items); }
 };
 inline Array make_array(shared_ptr<vector<DynamicType>> && backing)
 {
@@ -847,27 +821,12 @@ int interpret(const Program & programdata)
             &&HandlerDouble,
             &&HandlerDoubleInline,
             
-            &&HandlerAdd,
-            &&HandlerSub,
-            &&HandlerMul,
-            &&HandlerDiv,
-            &&HandlerMod,
+            &&HandlerAdd, &&HandlerSub, &&HandlerMul, &&HandlerDiv, &&HandlerMod,
+            &&HandlerAddAssign, &&HandlerSubAssign, &&HandlerMulAssign, &&HandlerDivAssign, &&HandlerModAssign,
             
-            &&HandlerAddAssign,
-            &&HandlerSubAssign,
-            &&HandlerMulAssign,
-            &&HandlerDivAssign,
-            &&HandlerModAssign,
-            
-            &&HandlerAnd,
-            &&HandlerOr,
-            &&HandlerXor,
-            
-            &&HandlerShl,
-            &&HandlerShr,
-            
-            &&HandlerBoolAnd,
-            &&HandlerBoolOr,
+            &&HandlerAnd, &&HandlerOr, &&HandlerXor,
+            &&HandlerShl, &&HandlerShr,
+            &&HandlerBoolAnd, &&HandlerBoolOr,
             
             &&HandlerAssign,
             &&HandlerAssignVar,
@@ -878,12 +837,8 @@ int interpret(const Program & programdata)
             &&HandlerIfGoto,
             &&HandlerIfGotoLabel,
             
-            &&HandlerIfGotoLabelEQ,
-            &&HandlerIfGotoLabelNE,
-            &&HandlerIfGotoLabelLE,
-            &&HandlerIfGotoLabelGE,
-            &&HandlerIfGotoLabelLT,
-            &&HandlerIfGotoLabelGT,
+            &&HandlerIfGotoLabelEQ, &&HandlerIfGotoLabelNE, &&HandlerIfGotoLabelLE,
+            &&HandlerIfGotoLabelGE, &&HandlerIfGotoLabelLT, &&HandlerIfGotoLabelGT,
             
             &&HandlerGoto,
             &&HandlerGotoLabel,
@@ -895,12 +850,7 @@ int interpret(const Program & programdata)
             &&HandlerScopeOpen,
             &&HandlerScopeClose,
             
-            &&HandlerCmpEQ,
-            &&HandlerCmpNE,
-            &&HandlerCmpLE,
-            &&HandlerCmpGE,
-            &&HandlerCmpLT,
-            &&HandlerCmpGT,
+            &&HandlerCmpEQ, &&HandlerCmpNE, &&HandlerCmpLE, &&HandlerCmpGE, &&HandlerCmpLT, &&HandlerCmpGT,
             
             &&HandlerArrayBuild,
             &&HandlerArrayIndex,
@@ -1144,7 +1094,7 @@ int interpret(const Program & programdata)
             auto a = val.as_array_ptr_thru_ref();
             
             if (val.is_array())
-                valpush((*a->items())[i]);
+                valpush((*a->items()).at(i));
             else
                 valpush({make_ref(a->items(), (size_t)i)});
         
@@ -1164,13 +1114,15 @@ int interpret(const Program & programdata)
             auto i = valpop().as_into_int();
             auto v = valpop();
             Array * a = v.as_array_ptr_thru_ref();
+            a->dirtify();
             a->items()->insert(a->items()->begin() + i, inval);
         
         INTERPRETER_MIDCASE(ArrayPopOut)
             auto i = valpop().as_into_int();
             auto v = valpop();
             Array * a = v.as_array_ptr_thru_ref();
-            auto ret = (*a->items())[i];
+            a->dirtify();
+            auto ret = (*a->items()).at(i);
             a->items()->erase(a->items()->begin() + i);
             valpush(ret);
         

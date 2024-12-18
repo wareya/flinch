@@ -59,3 +59,13 @@ $test 1 @ ->
 
 test !print
 
+# char evaluation: "a" !first
+
+"asdf" !first !print
+"asdf" !last !print
+
+[ "asdf" !first ] !printstr
+[ "asdf" !last ] !printstr
+
+( 0x20 == ( " " !first ) ) !print
+( 0x20 == ( "x" !first ) ) !print

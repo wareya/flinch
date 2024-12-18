@@ -92,5 +92,5 @@ Shunting-yard-related parens (i.e. `(`, `((`, `)`, `))` parens) follow nesting r
 
 ## License
 
-CC0 (only applies to `flinch.cpp` and the `*.fl` files).
+CC0 (only applies to `main.cpp`, `builtins.hpp`, `flinch.hpp`, and the files under `examples`).
 

@@ -12,6 +12,8 @@ Hello world:
 
 ```R
 "Hello, world!" !printstr
+# strings evaluate as arrays of numbers, so this would print a series of decimal ascii codes instead:
+#"Hello, world!" !print
 ```
 
 Pi calculation with shunting yard expressions:

@@ -436,9 +436,12 @@ Program load_program(string text)
         {
             if (program_texts[i] == "(")
             {
-                while (program_texts[i] != ")")
-                    nums.push_back(program_texts[i++]);
                 nums.push_back(program_texts[i++]);
+                for (int x = 1; x && i < program_texts.size(); i++)
+                {
+                    x += (program_texts[i] == "(") - (program_texts[i] == ")");
+                    nums.push_back(program_texts[i]);
+                }
             }
             else if (!prec.count(program_texts[i]))
                 nums.push_back(program_texts[i++]);

@@ -47,12 +47,37 @@ void f_printstr(vector<DynamicType> & stack)
     }
     puts("");
 }
+void f_first(vector<DynamicType> & stack)
+{
+    DynamicType v = vec_pop_back(stack);
+    Array * a;
+    if (v.is_array())
+        a = &v.as_array();
+    else if (v.is_ref() && v.as_ref().ref->is_array())
+        a = &v.as_ref().ref->as_array();
+    else
+        throw std::runtime_error("Tried to index into a non-array value");
+    stack.push_back((*a->items)[0]);
+}
+void f_last(vector<DynamicType> & stack)
+{
+    DynamicType v = vec_pop_back(stack);
+    Array * a;
+    if (v.is_array())
+        a = &v.as_array();
+    else if (v.is_ref() && v.as_ref().ref->is_array())
+        a = &v.as_ref().ref->as_array();
+    else
+        throw std::runtime_error("Tried to index into a non-array value");
+    stack.push_back((*a->items).back());
+}
 
 typedef void(*builtin_func)(vector<DynamicType> &);
-
 const static builtin_func builtins[] = {
     f_print,
     f_printstr,
+    f_first,
+    f_last,
 };
 static inline int builtins_lookup(const string & s)
 {
@@ -60,6 +85,10 @@ static inline int builtins_lookup(const string & s)
         return 0;
     else if (s == "printstr")
         return 1;
+    else if (s == "first")
+        return 2;
+    else if (s == "last")
+        return 3;
     else
         throw runtime_error("Unknown built-in function: " + s);
 };

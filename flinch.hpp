@@ -116,6 +116,7 @@ enum TKind : iword_t {
     ArrayLenMinusOne,
     ArrayPushIn,
     ArrayPopOut,
+    ArrayConcat,
     
     StringLiteral,
     StringLitReference,
@@ -125,30 +126,8 @@ enum TKind : iword_t {
     Exit,
 };
 
-#define TOKEN_LOG(NAME, TYPE)\
-vector<TYPE> token_##NAME##s;\
-iword_t get_token_##NAME##_num(TYPE s)\
-{\
-    auto n = token_##NAME##s.size();\
-    for (iword_t i = 0; i < n; i++)\
-    {\
-        if (token_##NAME##s[i] == s) return i;\
-    }\
-    token_##NAME##s.push_back(s);\
-    return n;\
-}\
-TYPE get_token_##NAME(iword_t n)\
-{\
-    return token_##NAME##s[n];\
-}
-
-TOKEN_LOG(string, string)
-TOKEN_LOG(func, string)
-TOKEN_LOG(varname, string)
-TOKEN_LOG(int, int64_t)
-TOKEN_LOG(double, double)
-
 struct Token { TKind kind; iword_t n, extra_1, extra_2; };
+struct Func { iword_t loc, len, name; };
 
 Token make_token(TKind kind, iword_t n)
 {
@@ -160,8 +139,6 @@ struct Ref { DynamicType * ref; };
 
 struct Label { int loc; };
 struct Array { shared_ptr<vector<DynamicType>> items; };
-struct Func { iword_t loc, len, name; };
-
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -247,6 +224,16 @@ struct DynamicType {
         throw std::runtime_error("Value is not of a numeric type");
     }
     
+    Array * as_array_ptr_thru_ref()
+    {
+        if (is_array())
+            return &as_array();
+        else if (is_ref() && as_ref().ref->is_array())
+            return &as_ref().ref->as_array();
+        else
+            throw std::runtime_error("Tried to use a non-array value as an array");
+    }
+        
     explicit operator bool() const
     {
         if (std::holds_alternative<int64_t>(value)) return !!std::get<int64_t>(value);
@@ -265,25 +252,47 @@ struct DynamicType {
     }
 };
 
-TOKEN_LOG(stringval, vector<DynamicType>)
-TOKEN_LOG(stringref, shared_ptr<vector<DynamicType>>)
-
-// built-in function definitions. must be specifically here. do not move.
-#include "builtins.hpp"
-
 struct Program {
     vector<Token> program;
     vector<int> lines;
     vector<Func> funcs;
+    
+    #define TOKEN_LOG(NAME, TYPE)\
+    vector<TYPE> token_##NAME##s;\
+    iword_t get_token_##NAME##_num(TYPE s)\
+    {\
+        for (iword_t i = 0; i < token_##NAME##s.size(); i++)\
+        {\
+            if (token_##NAME##s[i] == s) return i;\
+        }\
+        token_##NAME##s.push_back(s);\
+        return token_##NAME##s.size() - 1;\
+    }\
+    TYPE get_token_##NAME(iword_t n) const { return token_##NAME##s[n]; }
+    
+    TOKEN_LOG(string, string)
+    TOKEN_LOG(func, string)
+    TOKEN_LOG(varname, string)
+    TOKEN_LOG(int, int64_t)
+    TOKEN_LOG(double, double)
+    TOKEN_LOG(stringval, vector<DynamicType>)
+    TOKEN_LOG(stringref, shared_ptr<vector<DynamicType>>)
 };
+
+// built-in function definitions. must be specifically here. do not move.
+#include "builtins.hpp"
 
 Program load_program(string text)
 {
     size_t line = 0;
     size_t i = 0;
-
+    
+    Program programdata;
     vector<string> program_texts;
-    vector<int> lines;
+    
+    auto & program = programdata.program;
+    auto & lines = programdata.lines;
+    auto & funcs = programdata.funcs;
     
     while (i < text.size())
     {
@@ -382,9 +391,8 @@ Program load_program(string text)
         return true;
     };
     
-    get_token_func_num("");
+    programdata.get_token_func_num("");
     
-    vector<Token> program;
     vector<vector<string>> var_defs = {{}};
     
     auto var_is_local = [&](string & s) {
@@ -411,7 +419,7 @@ Program load_program(string text)
         unordered_map<string, int> prec;
         
         #define ADD_PREC(N, X) for (auto & s : X) prec.insert({s, N});
-        ADD_PREC(6, (initializer_list<string>{ "@", "@-", "@+" }));
+        ADD_PREC(6, (initializer_list<string>{ "@", "@-", "@+", "@@" }));
         ADD_PREC(5, (initializer_list<string>{ "*", "/", "%", "<<", ">>", "&" }));
         ADD_PREC(4, (initializer_list<string>{ "+", "-", "|", "^" }));
         ADD_PREC(3, (initializer_list<string>{ "==", "<=", ">=", "!=", ">", "<" }));
@@ -501,6 +509,7 @@ Program load_program(string text)
     trivial_ops.insert({"@?-", ArrayLenMinusOne});
     trivial_ops.insert({"@+", ArrayPushIn});
     trivial_ops.insert({"@-", ArrayPopOut});
+    trivial_ops.insert({"@@", ArrayConcat});
     
     for (i = 0; i < program_texts.size() && program_texts[i] != ""; i++)
     {
@@ -512,10 +521,10 @@ Program load_program(string text)
         else if (token != "^^" && token.back() == '^' && token.size() >= 2)
         {
             var_defs.push_back({});
-            program.push_back(make_token(FuncDec, get_token_func_num(token.substr(0, token.size() - 1))));
+            program.push_back(make_token(FuncDec, programdata.get_token_func_num(token.substr(0, token.size() - 1))));
         }
         else if (token != "^^" && token.front() == '^' && token.size() >= 2)
-            program.push_back(make_token(FuncLookup, get_token_func_num(token.substr(1))));
+            program.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
         else if (token == "^^")
         {
             var_defs.pop_back();
@@ -526,7 +535,7 @@ Program load_program(string text)
         else if (token.front() == '$' && token.back() == '$' && token.size() >= 3)
         {
             auto s = token.substr(1, token.size() - 2);
-            auto n = get_token_varname_num(s);
+            auto n = programdata.get_token_varname_num(s);
             var_defs.back().push_back(s);
             if (var_defs.size() > 1)
                 program.push_back(make_token(LocalVarDecLookup, n));
@@ -536,7 +545,7 @@ Program load_program(string text)
         else if (token.back() == '$' && token.size() >= 2)
         {
             auto s = token.substr(0, token.size() - 1);
-            auto n = get_token_varname_num(s);
+            auto n = programdata.get_token_varname_num(s);
             var_defs.back().push_back(s);
             if (var_defs.size() > 1)
                 program.push_back(make_token(LocalVarDec, n));
@@ -546,7 +555,7 @@ Program load_program(string text)
         else if (token.front() == '$' && token.size() >= 2)
         {
             auto s = token.substr(1);
-            auto n = get_token_varname_num(s);
+            auto n = programdata.get_token_varname_num(s);
             if (var_is_local(s))
                 program.push_back(make_token(LocalVarLookup, n));
             else if (var_is_global(s))
@@ -555,9 +564,9 @@ Program load_program(string text)
                 throw std::runtime_error("Undefined variable " + s + " on line " + std::to_string(lines[i]));
         }
         else if (token.front() == ':' && token.size() >= 2 && token != "::" && token != "::!")
-            program.push_back(make_token(LabelLookup, get_token_string_num(token.substr(1))));
+            program.push_back(make_token(LabelLookup, programdata.get_token_string_num(token.substr(1))));
         else if (token.back() == ':' && token.size() >= 2 && token != "::" && token != "::!")
-            program.push_back(make_token(LabelDec, get_token_string_num(token.substr(0, token.size() - 1))));
+            program.push_back(make_token(LabelDec, programdata.get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
             program.push_back(make_token(trivial_ops[token], 0));
         else if (token.size() >= 3 && token[0] == '"' && token.back() == '*') // '"' (fix tokei line counts)
@@ -565,7 +574,7 @@ Program load_program(string text)
             std::vector<DynamicType> str = {};
             for (size_t i = 1; i < token.size() - 2; i++)
                 str.push_back((int64_t)token[i]);
-            auto n = get_token_stringval_num(std::move(str));
+            auto n = programdata.get_token_stringval_num(std::move(str));
             program.push_back(make_token(StringLiteral, n));
         }
         else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
@@ -573,7 +582,7 @@ Program load_program(string text)
             auto str = make_shared<std::vector<DynamicType>>();
             for (size_t i = 1; i < token.size() - 1; i++)
                 str->push_back((int64_t)token[i]);
-            auto n = get_token_stringref_num(str);
+            auto n = programdata.get_token_stringref_num(str);
             program.push_back(make_token(StringLitReference, n));
         }
         else if (token.size() >= 2 && token[0] == '!')
@@ -613,7 +622,7 @@ Program load_program(string text)
                 else if (num3 == num && num3_smol >= dlo && num3_smol <= dhi)
                     program.push_back(make_token(IntegerInlineBigBin, (iword_t)num3_smol));
                 else
-                    program.push_back(make_token(Integer, get_token_int_num(num)));
+                    program.push_back(make_token(Integer, programdata.get_token_int_num(num)));
             }
             else if (isfloat(token))
             {
@@ -626,11 +635,11 @@ Program load_program(string text)
                 if ((dec >> x) << x == dec)
                     program.push_back(make_token(DoubleInline, (iword_t)(dec >> x)));
                 else
-                    program.push_back(make_token(Double, get_token_double_num(d)));
+                    program.push_back(make_token(Double, programdata.get_token_double_num(d)));
             }
             else if (isname(token))
             {
-                auto n = get_token_varname_num(token);
+                auto n = programdata.get_token_varname_num(token);
                 if (var_is_local(token) || var_is_global(token))
                     program.push_back(make_token(var_is_local(token) ? LocalVar : GlobalVar, n));
                 else
@@ -684,10 +693,10 @@ Program load_program(string text)
         }
     }
 
-    vector<Func> funcs(token_funcs.size());
+    funcs = vector<Func>(programdata.token_funcs.size());
     std::fill(funcs.begin(), funcs.end(), Func{0,0,0});
     
-    vector<iword_t> root_labels(token_strings.size());
+    vector<iword_t> root_labels(programdata.token_strings.size());
     std::fill(root_labels.begin(), root_labels.end(), (iword_t)-1);
     
     // rewrite in-function labels, register functions
@@ -699,7 +708,7 @@ Program load_program(string text)
             if (funcs[program[i].n].name != 0)
                 throw std::runtime_error("Redefined function on or near line " + std::to_string(lines[i]));
             
-            vector<iword_t> labels(token_strings.size());
+            vector<iword_t> labels(programdata.token_strings.size());
             std::fill(labels.begin(), labels.end(), (iword_t)-1);
             
             for (size_t i2 = i + 1; program[i2].kind != FuncEnd; i2 += 1)
@@ -746,9 +755,8 @@ Program load_program(string text)
                 throw std::runtime_error("Unknown label usage on or near line " + std::to_string(lines[i]));
         }
     }
-    
-    return {program, lines, funcs};
-} /// trivial_ops
+    return programdata;
+}
 
 int interpret(const Program & programdata)
 {
@@ -757,7 +765,7 @@ int interpret(const Program & programdata)
     auto & funcs = programdata.funcs;
     
     vector<DynamicType> vars_default;
-    for (size_t i = 0; i < token_varnames.size(); i++)
+    for (size_t i = 0; i < programdata.token_varnames.size(); i++)
         vars_default.push_back(0);
     
     vector<pair<iword_t, bool>> callstack;
@@ -880,6 +888,7 @@ int interpret(const Program & programdata)
             &&HandlerArrayLenMinusOne,
             &&HandlerArrayPushIn,
             &&HandlerArrayPopOut,
+            &&HandlerArrayConcat,
             
             &&HandlerStringLiteral,
             &&HandlerStringLitReference,
@@ -1079,7 +1088,7 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(IntegerInlineBigBin)
             valpush(((int64_t)(iwordsigned_t)n)<<15);
         INTERPRETER_MIDCASE(Integer)
-            valpush((int64_t)get_token_int(n));
+            valpush((int64_t)programdata.get_token_int(n));
         
         INTERPRETER_MIDCASE(DoubleInline)
             const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
@@ -1088,7 +1097,7 @@ int interpret(const Program & programdata)
             memcpy(&d, &dec, sizeof(dec));
             valpush(d);
         INTERPRETER_MIDCASE(Double)
-            valpush(get_token_double(n));
+            valpush(programdata.get_token_double(n));
         
         INTERPRETER_MIDCASE(LocalVar)
             valpush(varstack[n]);
@@ -1127,54 +1136,43 @@ int interpret(const Program & programdata)
         
         INTERPRETER_MIDCASE(ArrayLen)
             auto a = valpop();
-            if (a.is_array())
-                valpush((int64_t)a.as_array().items->size());
-            else if (a.is_ref() && a.as_ref().ref->is_array())
-                valpush((int64_t)a.as_ref().ref->as_array().items->size());
-            else
-                throw std::runtime_error("Tried to get length of a non-array value");
+            valpush((int64_t)a.as_array_ptr_thru_ref()->items->size());
         
         INTERPRETER_MIDCASE(ArrayLenMinusOne)
             auto a = valpop();
-            if (a.is_array())
-                valpush((int64_t)a.as_array().items->size() - 1);
-            else if (a.is_ref() && a.as_ref().ref->is_array())
-                valpush((int64_t)a.as_ref().ref->as_array().items->size() - 1);
-            else
-                throw std::runtime_error("Tried to get length of a non-array value");
-        
-        INTERPRETER_MIDCASE(ArrayPopOut)
-            auto i = valpop().as_into_int();
-            auto v = valpop();
-            Array * a;
-            if (v.is_array())
-                a = &v.as_array();
-            else if (v.is_ref() && v.as_ref().ref->is_array())
-                a = &v.as_ref().ref->as_array();
-            else
-                throw std::runtime_error("Tried to index into a non-array value");
-            auto ret = (*a->items)[i];
-            a->items->erase(a->items->begin() + i);
-            valpush(ret);
+            valpush((int64_t)a.as_array_ptr_thru_ref()->items->size() - 1);
         
         INTERPRETER_MIDCASE(ArrayPushIn)
             auto inval = valpop();
             auto i = valpop().as_into_int();
             auto v = valpop();
-            Array * a;
-            if (v.is_array())
-                a = &v.as_array();
-            else if (v.is_ref() && v.as_ref().ref->is_array())
-                a = &v.as_ref().ref->as_array();
-            else
-                throw std::runtime_error("Tried to index into a non-array value");
+            Array * a = v.as_array_ptr_thru_ref();
             a->items->insert(a->items->begin() + i, inval);
         
+        INTERPRETER_MIDCASE(ArrayPopOut)
+            auto i = valpop().as_into_int();
+            auto v = valpop();
+            Array * a = v.as_array_ptr_thru_ref();
+            auto ret = (*a->items)[i];
+            a->items->erase(a->items->begin() + i);
+            valpush(ret);
+        
+        INTERPRETER_MIDCASE(ArrayConcat)
+            auto vr = valpop();
+            Array * ar = vr.as_array_ptr_thru_ref();
+            auto vl = valpop();
+            Array * al = vl.as_array_ptr_thru_ref();
+            Array newarray{std::make_shared<vector<DynamicType>>()};
+            
+            newarray.items->insert(newarray.items->end(), al->items->begin(), al->items->end());
+            newarray.items->insert(newarray.items->end(), ar->items->begin(), ar->items->end());
+            valpush(newarray);
+        
         INTERPRETER_MIDCASE(StringLiteral)
-            valpush(Array{std::make_shared<vector<DynamicType>>(get_token_stringval(n))});
+            valpush(Array{std::make_shared<vector<DynamicType>>(programdata.get_token_stringval(n))});
         
         INTERPRETER_MIDCASE(StringLitReference)
-            valpush(Array{get_token_stringref(n)});
+            valpush(Array{programdata.get_token_stringref(n)});
         
         INTERPRETER_MIDCASE(BuiltinCall)
             builtins[n](evalstack);

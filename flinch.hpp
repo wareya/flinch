@@ -284,7 +284,7 @@ struct Program {
 Program load_program(string text)
 {
     size_t line = 0;
-    size_t i = 0, i2 = 0;
+    size_t i = 0;
 
     vector<string> program_texts;
     vector<int> lines;
@@ -302,50 +302,48 @@ Program load_program(string text)
         }
         else
         {
-            i2 = i;
-            if (text[i2] == '"')
+            size_t start_i = i;
+            if (text[i] == '"')
             {
-                i2++;
+                i++;
                 string s = "\"";
-                while (i2 < text.size())
+                while (i < text.size())
                 {
-                    if (text[i2] == '\\' && i2 + 1 < text.size())
+                    if (text[i] == '\\' && i + 1 < text.size())
                     {
-                        if (text[i2+1] == 'x' && i2 + 3 < text.size())
+                        if (text[i+1] == 'x' && i + 3 < text.size())
                         {
-                            char str[3] = {text[i2+2], text[i2+3], 0};
+                            char str[3] = {text[i+2], text[i+3], 0};
                             char c = std::strtol(str, nullptr, 16);
                             s += c;
                         }
-                        else if (text[i2+1] == 'n') s += '\n';
-                        else if (text[i2+1] == 'r') s += '\r';
-                        else if (text[i2+1] == 't') s += '\t';
-                        else if (text[i2+1] == '\\') s += '\\';
-                        else if (text[i2+1] == '\0') s += '\0';
+                        else if (text[i+1] == 'n') s += '\n';
+                        else if (text[i+1] == 'r') s += '\r';
+                        else if (text[i+1] == 't') s += '\t';
+                        else if (text[i+1] == '\\') s += '\\';
+                        else if (text[i+1] == '\0') s += '\0';
                         else
-                            s += text[i2+1];
-                        i2 += 1;
+                            s += text[i+1];
+                        i += 1;
                     }
                     else
-                        s += text[i2];
+                        s += text[i];
                     if (s.back() == '"') break;
-                    i2 += 1;
+                    i += 1;
                 }
                 
-                if (text[++i2] == '&') // reference-type strings
-                    s += text[i2++];
+                // reference-type strings
+                if (text[++i] == '*') s += text[i++];
                 
-                if (!isspace(text[i2]) && text[i2] != 0)
+                if (!isspace(text[i]) && text[i] != 0)
                     throw runtime_error("String literals must not have trailing text after the closing \" character");
             }
             else
             {
-                while (i2 < text.size() && !isspace(text[i2]))
-                    i2++;
+                while (i < text.size() && !isspace(text[i])) i++;
             }
-            program_texts.push_back(text.substr(i, i2 - i));
+            program_texts.push_back(text.substr(start_i, i - start_i));
             lines.push_back(line + 1);
-            i = i2;
         }
     }
     
@@ -571,18 +569,18 @@ Program load_program(string text)
             program.push_back(make_token(LabelDec, get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
             program.push_back(make_token(trivial_ops[token], 0));
-        else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
+        else if (token.size() >= 3 && token[0] == '"' && token.back() == '*')
         {
             std::vector<DynamicType> str = {};
-            for (size_t i = 1; i < token.size() - 1; i++)
+            for (size_t i = 1; i < token.size() - 2; i++)
                 str.push_back((int64_t)token[i]);
             auto n = get_token_stringval_num(std::move(str));
             program.push_back(make_token(StringLiteral, n));
         }
-        else if (token.size() >= 3 && token[0] == '"' && token.back() == '&')
+        else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
         {
             auto str = make_shared<std::vector<DynamicType>>();
-            for (size_t i = 1; i < token.size() - 2; i++)
+            for (size_t i = 1; i < token.size() - 1; i++)
                 str->push_back((int64_t)token[i]);
             auto n = get_token_stringref_num(str);
             program.push_back(make_token(StringLitReference, n));

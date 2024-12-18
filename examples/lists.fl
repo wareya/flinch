@@ -4,7 +4,7 @@
 $a !print
 $b !print
 
-"combining..."& !printstr
+"combining..." !printstr
 
 $i$
 

@@ -11,7 +11,7 @@ To make up for concatenative math code being hard to read, Flinch has an optiona
 Hello world:
 
 ```R
-"Hello, world!"& !printstr
+"Hello, world!" !printstr
 ```
 
 Pi calculation with shunting yard expressions:

@@ -18,8 +18,8 @@ f^
     y$
     
     x !print
-    "Hello, world!"& !printstr # strings ending with & are reference strings and can be mutated, affecting later evaluations of the same string literal.
-    "Hello, world!" !printstr # strings ending without a & are value strings and the interpreter needs to make a copy of them whenever they're evaluated.
+    "Hello, world!" !printstr  # strings ending witout * are reference strings and can be mutated, affecting later evaluations of the same string literal.
+    "Hello, world!"* !printstr # strings ending with a * are value strings and the interpreter needs to make a copy of them whenever they're evaluated. the resulting array value is mutable but disjoint from the original backing array.
     
     # :yes is label lookup
     # (either looks at most recent definition of "yes:", or looks for next definition of "yes:")

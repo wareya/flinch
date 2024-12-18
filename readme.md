@@ -67,6 +67,29 @@ ret !print
 ret
 ````
 
+## Shunting Yard
+
+The shunting yard transformation (i.e. `( .... )` around expressions) has the following operator precedence table:
+
+
+```
+    6     @   @-  @+
+    5     *  /  %  <<  >>  &
+    4     +  -  |  ^
+    3     ==  <=  >=  !=  >  <
+    2     and  or
+    1     ->  +=  -=  *=  /=  %=
+    0     ;
+```
+
+(`@+` is included despite being a three-operand operator because including it makes some expressions much easier to write; however, it is fragile and can produce buggy transformations. Be careful!)
+
+(`;` is a no-op that can be used to control the reordering of subexpressions)
+
+In shunting yard expressions, `((` temporarily disables and `))` re-enables the transformation. Shunting yard expressions inside of a `(( .... ))` will themselves be transformed as well, just not stuff outside of them but still inside of the `(( .... ))`.
+
+Shunting-yard-related parens (i.e. `(`, `((`, `)`, `))` parens) follow nesting rules.
+
 ## License
 
 CC0 (only applies to `flinch.cpp` and the `*.fl` files).

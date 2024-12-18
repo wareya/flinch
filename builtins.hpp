@@ -72,8 +72,9 @@ void f_last(vector<DynamicType> & stack)
     stack.push_back((*a->items).back());
 }
 
-typedef void(*builtin_func)(vector<DynamicType> &);
-const static builtin_func builtins[] = {
+//typedef void(*builtin_func)(vector<DynamicType> &);
+//const static builtin_func builtins[] = {
+static void(* const builtins [])(vector<DynamicType> &) = {
     f_print,
     f_printstr,
     f_first,

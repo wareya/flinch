@@ -1,10 +1,12 @@
 # Flinch
 
-Flinch is a super ultra-lightweight scripting language (**under 1000 lines of code**), faster than python but slower than lua, designed to be as easy to implement as possible while still having enough functionality to be theoretically usable for "real programming".
+Flinch is a super ultra-lightweight scripting language (**under 1000 lines of code**), faster than python 3 but slower than lua\*, designed to be as easy to implement as possible while still having enough functionality to be theoretically usable for "real programming".
 
 Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`). A consequence of this is that no parsing is needed and expressions can be evaluated by the same machinery that's responsible for control flow. Rather than using blocks and structured branches, Flinch exposes labels and direct jumps (`goto`, `if_goto`), which makes it much easier to implement.
 
 To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
+
+\*: on microbenchmarks, \~30% the runtime of python 3, but 2\~3x the runtime of lua
 
 ## Examples
 
@@ -103,6 +105,12 @@ $ tokei flinch.hpp
 ===============================================================================
  Total                   1         1197          997           19          181
 ===============================================================================
+```
+
+An empty `builtins.hpp` is:
+```c++
+static void(* const builtins [])(vector<DynamicType> &) = { 0 };
+static inline int builtins_lookup(const string & s) { throw runtime_error("Unknown built-in function: " + s); };
 ```
 
 ## License

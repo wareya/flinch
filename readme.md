@@ -12,13 +12,36 @@ Hello world:
 "Hello, world!"& !printstr
 ```
 
-Pi calculation:
+Pi calculation with shunting yard expressions (Flinch has an optional infix expression unrolling system):
 
 ```R
 calc_pi^
-    0.0 $sum$ <-
-    -1.0 $flip$ <-
-    1 $i$ <-
+    ( 0.0 -> $sum$ )
+    ( -1.0 -> $flip$ )
+    ( 0 -> $i$ )
+    
+    :loopend goto loopstart:
+        ( -1.0 *= $flip )
+        ( flip / ( i * 2 - 1 ) += $sum )
+    loopend: $i 10000000 :loopstart inc_goto_until
+    
+    ( sum * 4.0 ) return
+^^
+
+^calc_pi call_eval
+
+$ret$ ->
+ret !print
+ret
+```
+
+Pi calculation with only RPN/concatenation:
+
+```R
+calc_pi^
+    0.0 $sum$ ->
+    -1.0 $flip$ ->
+    1 $i$ ->
     
     :loopend goto
     
@@ -35,7 +58,7 @@ calc_pi^
 
 ^calc_pi call_eval
 
-$ret$ <-
+$ret$ ->
 ret !print
 ret
 ````

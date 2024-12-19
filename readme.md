@@ -140,21 +140,35 @@ Using the "too simple" pi calculation benchmark (with fewer iterations than the 
 ```
 $ hyperfine "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" --warmup 3
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     232.8 ms ±   2.0 ms    [User: 228.2 ms, System: 4.6 ms]
-  Range (min … max):   230.8 ms … 238.3 ms    12 runs
+  Time (mean ± σ):     206.7 ms ±   3.1 ms    [User: 204.4 ms, System: 2.9 ms]
+  Range (min … max):   202.6 ms … 211.1 ms    14 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      77.8 ms ±   1.1 ms    [User: 73.7 ms, System: 4.3 ms]
-  Range (min … max):    76.3 ms …  81.2 ms    36 runs
+  Time (mean ± σ):      77.1 ms ±   0.8 ms    [User: 73.8 ms, System: 5.7 ms]
+  Range (min … max):    76.0 ms …  79.3 ms    37 runs
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.279 s ±  0.030 s    [User: 1.274 s, System: 0.007 s]
-  Range (min … max):    1.256 s …  1.360 s    10 runs
+  Time (mean ± σ):      1.283 s ±  0.030 s    [User: 1.276 s, System: 0.007 s]
+  Range (min … max):    1.260 s …  1.359 s    10 runs
 
 Summary
   lua etc/too_simple.lua ran
-    2.99 ± 0.05 times faster than a.exe examples/too_simple_2_shunting.fl
-   16.44 ± 0.44 times faster than python etc/too_simple.py
+    2.68 ± 0.05 times faster than a.exe examples/too_simple_2_shunting.fl
+   16.63 ± 0.42 times faster than python etc/too_simple.py
+```
+
+Build-related info:
+
+```
+wareya@Toriaezu UCRT64 ~/dev/flinch
+$ clang++ ^Call -Wextra -pedantic -Wno-gnu-label-as-value main.cpp -O3 -frandom-seed=constant_seed -fuse-ld=lld -Wl,--no-insert-timestamp -fno-plt -fno-stack-protector -flto
+
+wareya@Toriaezu UCRT64 ~/dev/flinch
+$ clang++ --version
+clang version 19.1.4
+Target: x86_64-w64-windows-gnu
+Thread model: posix
+InstalledDir: C:/msys64/ucrt64/bin
 ```
 
 ## License

@@ -1,18 +1,11 @@
 
 // built-in function definitions. customize however you want!
 
-void f_print_inner(DynamicType * val, const char * eol = "\n")
+void f_print_inner(DynamicType * val)
 {
-    if (val->is_ref())
-    {
-        printf("&");
-        return f_print_inner(val->as_ref().ref(), eol);
-    }
-    
-    if (val->is_int())         printf("%zd%s", val->as_int(), eol);
-    else if (val->is_double()) printf("%.17g%s", val->as_double(), eol);
+    if (val->is_int())         printf("%zd", val->as_int());
+    else if (val->is_double()) printf("%.17g", val->as_double());
     else if (val->is_func())   printf("<function>");
-    else if (val->is_label())  printf("<label>");
     else if (val->is_label())  printf("<label>");
     else if (val->is_array())
     {
@@ -21,16 +14,21 @@ void f_print_inner(DynamicType * val, const char * eol = "\n")
         for (size_t i = 0; i < list.size(); i++)
         {
             if (i != 0) printf(", ");
-            f_print_inner(&list[i], "");
+            f_print_inner(&list[i]);
         }
-        printf("]%s", eol);
+        printf("]");
     }
-    
+    else if (val->is_ref())
+    {
+        printf("&");
+        f_print_inner(val->as_ref().ref());
+    }
 }
 void f_print(vector<DynamicType> & stack)
 {
     DynamicType v = vec_pop_back(stack);
     f_print_inner(&v);
+    printf("\n");
 }
 void f_printstr(vector<DynamicType> & stack)
 {

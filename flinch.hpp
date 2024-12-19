@@ -40,7 +40,7 @@ const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 enum TKind : iword_t {
     GlobalVar, GlobalVarDec, GlobalVarLookup, GlobalVarDecLookup,
     LocalVar, LocalVarDec, LocalVarLookup, LocalVarDecLookup,
-    FuncDec, FuncLookup, FuncEnd,
+    FuncDec, FuncLookup, FuncCall, FuncEnd,
     LabelDec, LabelLookup,
     
     Integer,
@@ -532,12 +532,14 @@ Program load_program(string text)
             shunting_yard(i--);
         else if (token == "((" || token == "))" || token == ";")
             lines.erase(lines.begin() + i);
-        else if (token != "^^" && token.back() == '^' && token.size() >= 2)
+        else if (token != "^^" && token.size() >= 2 && token.back() == '^')
         {
             var_defs.push_back({});
             program.push_back(make_token(FuncDec, programdata.get_token_func_num(token.substr(0, token.size() - 1))));
         }
-        else if (token != "^^" && token.front() == '^' && token.size() >= 2)
+        else if (token != "^^" && token.size() >= 3 && token.front() == '^' && token[1] == '^')
+            program.push_back(make_token(FuncCall, programdata.get_token_func_num(token.substr(2))));
+        else if (token != "^^" && token.size() >= 2 && token.front() == '^')
             program.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
         else if (token == "^^")
         {
@@ -843,7 +845,7 @@ int interpret(const Program & programdata)
         static const void * const handlers[] = {
             &&HandlerGlobalVar, &&HandlerGlobalVarDec, &&HandlerGlobalVarLookup, &&HandlerGlobalVarDecLookup,
             &&HandlerLocalVar, &&HandlerLocalVarDec, &&HandlerLocalVarLookup, &&HandlerLocalVarDecLookup,
-            &&HandlerFuncDec, &&HandlerFuncLookup, &&HandlerFuncEnd,
+            &&HandlerFuncDec, &&HandlerFuncLookup, &&HandlerFuncCall, &&HandlerFuncEnd,
             &&HandlerLabelDec, &&HandlerLabelLookup,
             
             &&HandlerInteger,
@@ -964,6 +966,15 @@ int interpret(const Program & programdata)
             varstack_raw = varstack->data();
             i = f.loc;
         
+        INTERPRETER_MIDCASE(FuncCall)
+            Func f = funcs[n];
+            callstack.push_back(i);
+            fstack.push_back(f.name);
+            varstacks.push_back(varstack);
+            varstack = make_shared<vector<DynamicType>>(vars_default);
+            varstack_raw = varstack->data();
+            i = f.loc;
+        
         INTERPRETER_MIDCASE(Assign)
             Ref ref = std::move(valpop().as_ref());
             auto val = valpop();
@@ -994,7 +1005,7 @@ int interpret(const Program & programdata)
             if (!num.is_int() || !ref.ref()->is_int())
                 throw std::runtime_error("Tried to use for loop with non-integer");
             *ref.ref() = *ref.ref() + 1;
-            if (*ref.ref() <= num)
+            if (*ref.ref() < num)
                 i = dest.loc;
         INTERPRETER_MIDCASE(ForLoopLabel)
             auto num = valpop();
@@ -1002,7 +1013,7 @@ int interpret(const Program & programdata)
             if (!num.is_int() || !ref.ref()->is_int())
                 throw std::runtime_error("Tried to use for loop with non-integer");
             *ref.ref() = *ref.ref() + 1;
-            if (*ref.ref() <= num)
+            if (*ref.ref() < num)
                 i = n;
         INTERPRETER_MIDCASE(ForLoopLocal)
             // FIXME: add a global version
@@ -1011,7 +1022,7 @@ int interpret(const Program & programdata)
                 throw std::runtime_error("Tried to use for loop with non-integer");
             auto & v = _v.as_int();
             int64_t num = (iwordsigned_t)program[i-1].extra_2;
-            if (++v <= num)
+            if (++v < num)
                 i = n;
         
         // INTERPRETER_MIDCASE_GOTOLABELCMP

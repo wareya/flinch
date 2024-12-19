@@ -9,7 +9,7 @@ calc_pi^
         ( -1.0 *= $flip )
         ( flip / ( i * 2 - 1 ) += $sum )
     loopend:
-    $i 10000000 :loopstart inc_goto_until
+    $i 10000001 :loopstart inc_goto_until
     
     ( sum * 4.0 ) return
 ^^

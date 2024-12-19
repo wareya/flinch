@@ -6,7 +6,7 @@ Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`
 
 To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
 
-\*: Measured compiled with `clang++ -O3`, not GCC, running microbenchmarks: \~25% the runtime of python 3, ~4x the runtime of lua, so logarithmically half way bettween python and lua.
+\*: Measured compiled with `clang++ -O3`, not GCC, running microbenchmarks: \~20% the runtime of python 3, and ~3x the runtime of lua
 
 ## Examples
 
@@ -106,7 +106,7 @@ The shunting yard transformation (i.e. `( .... )` around expressions) has the fo
 
 (`;` is a no-op that can be used to control the reordering of subexpressions)
 
-In shunting yard expressions, `((` temporarily disables and `))` re-enables the transformation. Shunting yard expressions inside of a `(( .... ))` will themselves be transformed as well, just not stuff outside of them but still inside of the `(( .... ))`.
+In shunting yard expressions, `((` temporarily disables and `))` re-enables the transformation. Shunting yard expressions inside of a `(( .... ))` will themselves still be transformed.
 
 Shunting-yard-related parens (i.e. `(`, `((`, `)`, `))` parens) follow nesting rules.
 
@@ -119,9 +119,9 @@ $ tokei flinch.hpp
 ===============================================================================
  Language            Files        Lines         Code     Comments       Blanks
 ===============================================================================
- C++ Header              1         1197          996           19          182
+ C++ Header              1         1191          968           41          182
 ===============================================================================
- Total                   1         1197          996           19          182
+ Total                   1         1191          968           41          182
 ===============================================================================
 ```
 
@@ -138,29 +138,25 @@ static inline int builtins_lookup(const string & s) { throw runtime_error("Unkno
 Using the "too simple" pi calculation benchmark (with fewer iterations than the benchmark game does):
 
 ```
-$ hyperfine "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" --warmup 2
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     332.6 ms ±   3.4 ms    [User: 328.4 ms, System: 5.8 ms]
-  Range (min … max):   330.0 ms … 340.0 ms    10 runs
+  Time (mean ± σ):     234.6 ms ±   2.1 ms    [User: 229.5 ms, System: 6.1 ms]
+  Range (min … max):   232.2 ms … 238.6 ms    12 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      78.0 ms ±   2.6 ms    [User: 72.2 ms, System: 3.1 ms]
-  Range (min … max):    76.5 ms …  92.7 ms    37 runs
+  Time (mean ± σ):      78.5 ms ±   2.7 ms    [User: 73.8 ms, System: 5.1 ms]
+  Range (min … max):    76.5 ms …  89.2 ms    37 runs
 
   Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other program
 s. It might help to use the '--warmup' or '--prepare' options.
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.281 s ±  0.041 s    [User: 1.274 s, System: 0.010 s]
-  Range (min … max):    1.261 s …  1.397 s    10 runs
-
-  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other program
-s. It might help to use the '--warmup' or '--prepare' options.
+  Time (mean ± σ):      1.280 s ±  0.012 s    [User: 1.280 s, System: 0.006 s]
+  Range (min … max):    1.267 s …  1.302 s    10 runs
 
 Summary
   lua etc/too_simple.lua ran
-    4.26 ± 0.15 times faster than a.exe examples/too_simple_2_shunting.fl
-   16.42 ± 0.76 times faster than python etc/too_simple.py
+    2.99 ± 0.10 times faster than a.exe examples/too_simple_2_shunting.fl
+   16.30 ± 0.57 times faster than python etc/too_simple.py
 ```
 
 ## License

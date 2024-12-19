@@ -4,13 +4,16 @@
 void f_print_inner(DynamicType * val, const char * eol = "\n")
 {
     if (val->is_ref())
+    {
+        printf("&");
         return f_print_inner(val->as_ref().ref(), eol);
+    }
     
     if (val->is_int())         printf("%zd%s", val->as_int(), eol);
     else if (val->is_double()) printf("%.17g%s", val->as_double(), eol);
-    else if (val->is_func())   puts("<function>");
-    else if (val->is_label())  puts("<label>");
-    else if (val->is_label())  puts("<label>");
+    else if (val->is_func())   printf("<function>");
+    else if (val->is_label())  printf("<label>");
+    else if (val->is_label())  printf("<label>");
     else if (val->is_array())
     {
         printf("[");

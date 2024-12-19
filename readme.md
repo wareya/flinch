@@ -6,7 +6,7 @@ Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`
 
 To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
 
-\*: Measured compiled with `clang++ -O3`, not GCC, running microbenchmarks: \~25% the runtime of python 3, ~2x the runtime of lua
+\*: Measured compiled with `clang++ -O3`, not GCC, running microbenchmarks: \~25% the runtime of python 3, ~4x the runtime of lua, so logarithmically half way bettween python and lua.
 
 ## Examples
 
@@ -138,29 +138,29 @@ static inline int builtins_lookup(const string & s) { throw runtime_error("Unkno
 Using the "too simple" pi calculation benchmark (with fewer iterations than the benchmark game does):
 
 ```
-wareya@Toriaezu UCRT64 ~/dev/flinch
-$ time ./etc/too_simple.lua
-0 3.1415925535897915
+$ hyperfine "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" --warmup 2
+Benchmark 1: a.exe examples/too_simple_2_shunting.fl
+  Time (mean ± σ):     332.6 ms ±   3.4 ms    [User: 328.4 ms, System: 5.8 ms]
+  Range (min … max):   330.0 ms … 340.0 ms    10 runs
 
-real    0m0.162s
-user    0m0.000s
-sys     0m0.000s
+Benchmark 2: lua etc/too_simple.lua
+  Time (mean ± σ):      78.0 ms ±   2.6 ms    [User: 72.2 ms, System: 3.1 ms]
+  Range (min … max):    76.5 ms …  92.7 ms    37 runs
 
-wareya@Toriaezu UCRT64 ~/dev/flinch
-$ time ./etc/too_simple.py
-0 3.1415925535897915
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other program
+s. It might help to use the '--warmup' or '--prepare' options.
 
-real    0m1.354s
-user    0m0.000s
-sys     0m0.015s
+Benchmark 3: python etc/too_simple.py
+  Time (mean ± σ):      1.281 s ±  0.041 s    [User: 1.274 s, System: 0.010 s]
+  Range (min … max):    1.261 s …  1.397 s    10 runs
 
-wareya@Toriaezu UCRT64 ~/dev/flinch
-$ time ./a.exe examples/too_simple_2_shunting.fl
-3.1415925535897915
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other program
+s. It might help to use the '--warmup' or '--prepare' options.
 
-real    0m0.339s
-user    0m0.000s
-sys     0m0.000s
+Summary
+  lua etc/too_simple.lua ran
+    4.26 ± 0.15 times faster than a.exe examples/too_simple_2_shunting.fl
+   16.42 ± 0.76 times faster than python etc/too_simple.py
 ```
 
 ## License

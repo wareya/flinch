@@ -55,27 +55,24 @@ enum TKind : iword_t {
     
     Add, Sub, Mul, Div, Mod,
     AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
+    AddAsLocal, SubAsLocal, MulAsLocal, DivAsLocal, ModAsLocal,
+    //AddAsGlobal, SubAsGlobal, MulAsGlobal, DivAsGlobal, ModAsGlobal,
     
     And, Or, Xor,
     Shl, Shr,
     BoolAnd, BoolOr,
     
-    Assign,
-    AssignVar,
+    Assign, AsLocal, // AsGlobal,
     Return,
     Call,
     
-    IfGoto,
-    IfGotoLabel,
+    IfGoto, IfGotoLabel,
     
     IfGotoLabelEQ, IfGotoLabelNE, IfGotoLabelLE, IfGotoLabelGE, IfGotoLabelLT, IfGotoLabelGT,
     
-    Goto,
-    GotoLabel,
+    Goto, GotoLabel,
     
-    ForLoop,
-    ForLoopLabel,
-    ForLoopFull,
+    ForLoop, ForLoopLabel, ForLoopLocal, // ForLoopGlobal,
     
     ScopeOpen,
     ScopeClose,
@@ -111,30 +108,36 @@ Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 struct DynamicType;
 #ifdef MEMORY_SAFE_REFERENCES
 struct Ref {
-    // this backing vector will never be resized or reallocated, so it's OK to store a pointer directly into it
     shared_ptr<vector<DynamicType>> backing;
     DynamicType * refdata;
     DynamicType * ref() { return refdata; }
+    ~Ref();
 };
-inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{backing, &(*backing).at(i)}; }
+
+__attribute__((noinline)) Ref::~Ref() { }
+
+#define MAKEREF return Ref{backing, &(*backing).at(i)};
 #else // MEMORY_SAFE_REFERENCES
 struct Ref {
     DynamicType * refdata;
     DynamicType * ref() { return refdata; }
 };
-inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { return Ref{&(*backing).at(i)}; }
+#define MAKEREF return Ref{&(*backing).at(i)};
 #endif // MEMORY_SAFE_REFERENCES
 
 struct Label { int loc; };
 struct Array {
     shared_ptr<shared_ptr<vector<DynamicType>>> _items;
     shared_ptr<vector<DynamicType>> & items() { return *_items; }
+    ~Array();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
     // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
     // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
     void dirtify() { if (!_items->unique()) *_items = make_shared<vector<DynamicType>>(**_items); }
 };
+__attribute__((noinline)) Array::~Array() { }
+
 inline Array make_array(shared_ptr<vector<DynamicType>> && backing)
 {
     return Array { make_shared<shared_ptr<vector<DynamicType>>>(backing) };
@@ -169,7 +172,7 @@ struct DynamicType {
             return WRAPPER2(WX(std::get<int64_t>(value)) OP2 WX(std::get<double>(other.value)));\
         else if (std::holds_alternative<double>(value) && std::holds_alternative<int64_t>(other.value))\
             return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<int64_t>(other.value)));\
-        throw std::runtime_error("Unsupported operation: non-numeric operands");
+        throw std::runtime_error("Unsupported operation: non-numeric operands for operator " #OP " (or maybe) " #OP2);
     
     #define COMMA ,
     
@@ -252,6 +255,8 @@ struct DynamicType {
         return *this;
     }
 };
+
+inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { MAKEREF }
 
 struct Program {
     vector<Token> program;
@@ -408,6 +413,7 @@ Program load_program(string text)
     auto shunting_yard = [&](size_t i) {
         size_t start_i = i;
         program_texts.erase(program_texts.begin() + i); // erase leading paren
+        lines.erase(lines.begin() + i);
         
         unordered_map<string, int> prec;
         
@@ -420,7 +426,7 @@ Program load_program(string text)
         ADD_PREC(1, (initializer_list<string>{ "->", "+=", "-=", "*=", "/=", "%=" }));
         ADD_PREC(0, (initializer_list<string>{ ";" }));
         
-        vector<string> nums, ops;
+        vector<int> nums, ops;
         
         while (i < program_texts.size() && program_texts[i] != ")")
         {
@@ -429,26 +435,36 @@ Program load_program(string text)
                 for (int x = 0; i < program_texts.size() && (x || program_texts[i] == string("(") || program_texts[i] == string("((")); i++)
                 {
                     x += (program_texts[i] == string("(" )|| program_texts[i] == string("((")) - (program_texts[i] == string(")") || program_texts[i] == string("))"));
-                    nums.push_back(program_texts[i]);
+                    nums.push_back(i);
                 }
             }
             else if (!prec.count(program_texts[i]))
-                nums.push_back(program_texts[i++]);
+                nums.push_back(i++);
             else
             {
-                while (ops.size() && prec[program_texts[i]] < prec[ops.back()])
+                while (ops.size() && prec[program_texts[i]] < prec[program_texts[ops.back()]])
                     nums.push_back(vec_pop_back(ops));
-                ops.push_back(program_texts[i++]);
+                ops.push_back(i++);
             }
         }
-        
         while (ops.size()) nums.push_back(vec_pop_back(ops));
         
         if (i >= program_texts.size())
             throw std::runtime_error("Paren expression must end in a closing paren, i.e. ')', starting on or near line " + to_string(lines[start_i]));
         
+        // parallel move; we go through this effort to keep lines and texts in sync
+        vector<string> texts_s;
+        vector<int> lines_s;
         for (size_t j = 0; j < nums.size(); j++)
-            program_texts[j + start_i] = nums[j];
+        {
+            texts_s.push_back(std::move(program_texts[nums[j]]));
+            lines_s.push_back(lines[nums[j]]);
+        }
+        for (size_t j = 0; j < nums.size(); j++)
+        {
+            program_texts[j + start_i] = std::move(texts_s[j])  ;
+            lines[j + start_i] = lines_s[j];
+        }
         program_texts.erase(program_texts.begin() + i);
         lines.erase(lines.begin() + i);
     };
@@ -661,9 +677,16 @@ Program load_program(string text)
     for (i = 0; (((ptrdiff_t)i) < 0 || i < program.size()) && program[i].kind != Exit && program[i + 1].kind != Exit; ++i)
     {
         if (still_valid() && program[i].kind == LocalVarLookup &&
+            (program[i+1].kind == AddAssign || program[i+1].kind == SubAssign ||
+             program[i+1].kind == MulAssign || program[i+1].kind == DivAssign || program[i+1].kind == ModAssign))
+        {
+            program[i].kind = (TKind)(program[i+1].kind + (AddAsLocal - AddAssign));
+            prog_erase(i-- + 1);
+        }
+        if (still_valid() && program[i].kind == LocalVarLookup &&
             (program[i+1].kind == Assign || program[i+1].kind == Goto || program[i+1].kind == IfGoto))
         {
-            program[i].kind = program[i+1].kind == Assign ? AssignVar : program[i+1].kind == Goto ? GotoLabel : IfGotoLabel;
+            program[i].kind = program[i+1].kind == Assign ? AsLocal : program[i+1].kind == Goto ? GotoLabel : IfGotoLabel;
             prog_erase(i-- + 1);
         }
         if (still_valid() && program[i].kind == LabelLookup && program[i+1].kind == ForLoop)
@@ -674,7 +697,7 @@ Program load_program(string text)
         }
         if (still_valid() && i + 2 < program.size() && program[i].kind == LocalVarLookup && program[i+1].kind == IntegerInline && program[i+2].kind == ForLoopLabel)
         {
-            program[i].kind = ForLoopFull;
+            program[i].kind = ForLoopLocal;
             program[i].extra_1 = program[i].n;
             program[i].extra_2 = program[i+1].n;
             program[i].n = program[i+2].n;
@@ -721,7 +744,7 @@ Program load_program(string text)
             for (; program[i2].kind != FuncEnd; i2 += 1)
             {
                 if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel ||
-                    program[i2].kind == ForLoopFull || (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
+                    program[i2].kind == ForLoopLocal || (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
                 {
                     program[i2].n = labels[program[i2].n];
                     if(program[i2].n == (iword_t)-1)
@@ -744,7 +767,7 @@ Program load_program(string text)
         if (program[i].kind == FuncDec) i += funcs[program[i].n].len;
         
         if (program[i].kind == LabelLookup || program[i].kind == GotoLabel || program[i].kind == ForLoopLabel ||
-            program[i].kind == ForLoopFull || (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
+            program[i].kind == ForLoopLocal || (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
         {
             program[i].n = root_labels[program[i].n];
             if (program[i].n == (iword_t)-1)
@@ -828,13 +851,14 @@ int interpret(const Program & programdata)
             
             &&HandlerAdd, &&HandlerSub, &&HandlerMul, &&HandlerDiv, &&HandlerMod,
             &&HandlerAddAssign, &&HandlerSubAssign, &&HandlerMulAssign, &&HandlerDivAssign, &&HandlerModAssign,
+            &&HandlerAddAsLocal, &&HandlerSubAsLocal, &&HandlerMulAsLocal, &&HandlerDivAsLocal, &&HandlerModAsLocal,
             
             &&HandlerAnd, &&HandlerOr, &&HandlerXor,
             &&HandlerShl, &&HandlerShr,
             &&HandlerBoolAnd, &&HandlerBoolOr,
             
             &&HandlerAssign,
-            &&HandlerAssignVar,
+            &&HandlerAsLocal,
             &&HandlerReturn,
             &&HandlerCall,
             
@@ -849,7 +873,7 @@ int interpret(const Program & programdata)
             
             &&HandlerForLoop,
             &&HandlerForLoopLabel,
-            &&HandlerForLoopFull,
+            &&HandlerForLoopLocal,
             
             &&HandlerScopeOpen,
             &&HandlerScopeClose,
@@ -949,7 +973,7 @@ int interpret(const Program & programdata)
             auto val = valpop();
             *ref.ref() = val;
         
-        INTERPRETER_MIDCASE(AssignVar)
+        INTERPRETER_MIDCASE(AsLocal)
             auto val = valpop();
             varstack_raw[n] = val;
         
@@ -984,7 +1008,7 @@ int interpret(const Program & programdata)
             *ref.ref() = (*ref.ref()) + 1;
             if (*ref.ref() <= num)
                 i = n;
-        INTERPRETER_MIDCASE(ForLoopFull)
+        INTERPRETER_MIDCASE(ForLoopLocal)
             // FIXME: add a global version
             auto & _v = varstack_raw[program[i-1].extra_1];
             if (!_v.is_int())
@@ -1025,6 +1049,11 @@ int interpret(const Program & programdata)
             auto a = valpop();\
             *ref.ref() = *ref.ref() OP a;
         
+        #define INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(NAME, OP) \
+        INTERPRETER_MIDCASE(NAME)\
+            auto a = valpop();\
+            varstack_raw[n] = varstack_raw[n] OP a;
+        
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Add, +)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Sub, -)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(Mul, *)
@@ -1045,6 +1074,12 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE_UNARY_ASSIGN(MulAssign, *)
         INTERPRETER_MIDCASE_UNARY_ASSIGN(DivAssign, /)
         INTERPRETER_MIDCASE_UNARY_ASSIGN(ModAssign, %)
+        
+        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(AddAsLocal, +)
+        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(SubAsLocal, -)
+        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(MulAsLocal, *)
+        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(DivAsLocal, /)
+        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(ModAsLocal, %)
         
         INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpEQ, ==)
         INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpNE, !=)

@@ -7,7 +7,7 @@ function main()
         flip = flip * -1.0
         sum = sum + flip / (2 * i - 1)
     end
-    print(string.format("0 %.16f", sum * 4.0))
+    print(string.format("%.16f", sum * 4.0))
 end
 
 main()

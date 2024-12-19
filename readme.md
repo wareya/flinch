@@ -85,7 +85,7 @@ A: Practically, no. But like if you're going to throw a scripting language into 
 
 #### Q: Is this memory safe?
 
-A: If you compile with MEMORY_SAFE_REFERENCES defined, yes! However on microbenchmarks this is more than 100% slower (more than 2x the runtime), so it's left as an option instead of being mandatory.
+A: Yes, as long as you don't compile with MEMORY_UNSAFE_REFERENCES defined.
 
 ## Shunting Yard
 

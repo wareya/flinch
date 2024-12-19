@@ -25,30 +25,23 @@ template <typename T> T vec_pop_back(std::vector<T> & v)
     v.pop_back();
     return ret;
 }
+template <typename T> T & vec_at_back(std::vector<T> & v)
+{
+    return v.at(v.size()-1);
+}
 
 using namespace std;
 
 typedef uint32_t iword_t;
 typedef  int32_t iwordsigned_t;
+const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 
 // token kind
 enum TKind : iword_t {
-    GlobalVar,
-    GlobalVarDec,
-    GlobalVarLookup,
-    GlobalVarDecLookup,
-    
-    LocalVar,
-    LocalVarDec,
-    LocalVarLookup,
-    LocalVarDecLookup,
-    
-    FuncDec,
-    FuncLookup,
-    FuncEnd,
-    
-    LabelDec,
-    LabelLookup,
+    GlobalVar, GlobalVarDec, GlobalVarLookup, GlobalVarDecLookup,
+    LocalVar, LocalVarDec, LocalVarLookup, LocalVarDecLookup,
+    FuncDec, FuncLookup, FuncEnd,
+    LabelDec, LabelLookup,
     
     Integer,
     IntegerInline,
@@ -60,15 +53,16 @@ enum TKind : iword_t {
     Add, Sub, Mul, Div, Mod,
     AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
     AddAsLocal, SubAsLocal, MulAsLocal, DivAsLocal, ModAsLocal,
+    // FIXME add global versions
     //AddAsGlobal, SubAsGlobal, MulAsGlobal, DivAsGlobal, ModAsGlobal,
+    AddIntInline, SubIntInline, MulIntInline, DivIntInline, ModIntInline,
+    AddDubInline, SubDubInline, MulDubInline, DivDubInline, ModDubInline,
+    // FIXME maybe add assignment versions of the inline ones?
     
-    And, Or, Xor,
-    Shl, Shr,
-    BoolAnd, BoolOr,
+    And, Or, Xor, Shl, Shr, BoolAnd, BoolOr,
     
     Assign, AsLocal, // AsGlobal,
-    Return,
-    Call,
+    Return, Call,
     
     IfGoto, IfGotoLabel,
     
@@ -88,11 +82,7 @@ enum TKind : iword_t {
     Clone,
     CloneDeep,
     
-    ArrayLen,
-    ArrayLenMinusOne,
-    ArrayPushIn,
-    ArrayPopOut,
-    ArrayConcat,
+    ArrayLen, ArrayLenMinusOne, ArrayPushIn, ArrayPopOut, ArrayConcat,
     
     StringLiteral,
     StringLitReference,
@@ -123,18 +113,13 @@ struct Ref {
     ~Ref();
     
     Ref(RefInfo * r) noexcept : info(r) { }
-    Ref(const Ref& r) noexcept;
-    Ref(Ref&& r) noexcept;
-    Ref & operator=(const Ref& r) noexcept;
-    Ref & operator=(Ref&& r) noexcept;
+    NOINLINE Ref(const Ref& r) noexcept { info = r.info; info->n++; }
+    Ref(Ref&& r) noexcept { info = r.info; r.info = nullptr; }
+    NOINLINE Ref & operator=(const Ref& r) noexcept { info = r.info; info->n++; return *this; }
+    Ref & operator=(Ref&& r) noexcept { info = r.info; r.info = nullptr; return *this; }
 };
 
 NOINLINE Ref::~Ref() { if (!info) return; info->n--; if (!info->n) delete info; }
-
-Ref::Ref(const Ref& r) noexcept { info = r.info; info->n++; }
-Ref::Ref(Ref&& r) noexcept { info = r.info; r.info = nullptr; }
-Ref & Ref::operator=(const Ref& r) noexcept { info = r.info; info->n++; return *this; }
-Ref & Ref::operator=(Ref&& r) noexcept { info = r.info; r.info = nullptr; return *this; }
 
 #define MAKEREF return Ref{new Ref::RefInfo{backing, &(*backing).at(i), 1}};
 #else // MEMORY_SAFE_REFERENCES
@@ -161,10 +146,7 @@ struct Array {
 };
 NOINLINE Array::~Array() { }
 
-inline Array make_array(shared_ptr<vector<DynamicType>> && backing)
-{
-    return Array { make_shared<shared_ptr<vector<DynamicType>>>(backing) };
-}
+inline Array make_array(shared_ptr<vector<DynamicType>> && backing) { return Array { make_shared<shared_ptr<vector<DynamicType>>>(backing) };}
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -195,7 +177,7 @@ struct DynamicType {
             return WRAPPER2(WX(std::get<int64_t>(value)) OP2 WX(std::get<double>(other.value)));\
         else if (std::holds_alternative<double>(value) && std::holds_alternative<int64_t>(other.value))\
             return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<int64_t>(other.value)));\
-        throw std::runtime_error("Unsupported operation: non-numeric operands for operator " #OP " (or maybe) " #OP2);
+        else throw std::runtime_error("Unsupported operation: non-numeric operands for operator " #OP " (or maybe) " #OP2);
     
     #define COMMA ,
     
@@ -252,12 +234,9 @@ struct DynamicType {
     
     Array * as_array_ptr_thru_ref()
     {
-        if (is_array())
-            return &as_array();
-        else if (is_ref() && as_ref().ref()->is_array())
-            return &as_ref().ref()->as_array();
-        else
-            throw std::runtime_error("Tried to use a non-array value as an array");
+        if (is_array()) return &as_array();
+        else if (is_ref() && as_ref().ref()->is_array()) return &as_ref().ref()->as_array();
+        else throw std::runtime_error("Tried to use a non-array value as an array");
     }
         
     explicit operator bool() const
@@ -477,17 +456,17 @@ Program load_program(string text)
         
         // parallel move; we go through this effort to keep lines and texts in sync
         vector<string> texts_s;
+        for (size_t j = 0; j < nums.size(); j++)
+            texts_s.push_back(std::move(program_texts[nums[j]]));
+        for (size_t j = 0; j < nums.size(); j++)
+            program_texts[j + start_i] = std::move(texts_s[j]);
+        
         vector<int> lines_s;
         for (size_t j = 0; j < nums.size(); j++)
-        {
-            texts_s.push_back(std::move(program_texts[nums[j]]));
             lines_s.push_back(lines[nums[j]]);
-        }
         for (size_t j = 0; j < nums.size(); j++)
-        {
-            program_texts[j + start_i] = std::move(texts_s[j])  ;
             lines[j + start_i] = lines_s[j];
-        }
+        
         program_texts.erase(program_texts.begin() + i);
         lines.erase(lines.begin() + i);
     };
@@ -665,10 +644,9 @@ Program load_program(string text)
                 
                 uint64_t dec;
                 memcpy(&dec, &d, sizeof(d));
-                const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
                 
-                if ((dec >> x) << x == dec)
-                    program.push_back(make_token(DoubleInline, (iword_t)(dec >> x)));
+                if ((dec >> iword_bits_from_i64) << iword_bits_from_i64 == dec)
+                    program.push_back(make_token(DoubleInline, (iword_t)(dec >> iword_bits_from_i64)));
                 else
                     program.push_back(make_token(Double, programdata.get_token_double_num(d)));
             }
@@ -697,10 +675,21 @@ Program load_program(string text)
     auto still_valid = [&]() { return i < program.size() && i + 1 < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; };
 
     // peephole optimizer!
-    for (i = 0; (((ptrdiff_t)i) < 0 || i < program.size()) && program[i].kind != Exit && program[i + 1].kind != Exit; ++i)
+    for (i = 0; ((ptrdiff_t)i) < 0 || (i < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit); ++i)
     {
-        if (still_valid() && program[i].kind == LocalVarLookup &&
-            (program[i+1].kind == AddAssign || program[i+1].kind == SubAssign ||
+        if (still_valid() && program[i].kind == IntegerInline && (program[i+1].kind == Add || program[i+1].kind == Sub ||
+            program[i+1].kind == Mul || program[i+1].kind == Div || program[i+1].kind == Mod))
+        {
+            program[i].kind = (TKind)(program[i+1].kind + (AddIntInline - Add));
+            prog_erase(i-- + 1);
+        }
+        if (still_valid() && program[i].kind == DoubleInline && (program[i+1].kind == Add || program[i+1].kind == Sub ||
+            program[i+1].kind == Mul || program[i+1].kind == Div || program[i+1].kind == Mod))
+        {
+            program[i].kind = (TKind)(program[i+1].kind + (AddDubInline - Add));
+            prog_erase(i-- + 1);
+        }
+        if (still_valid() && program[i].kind == LocalVarLookup && (program[i+1].kind == AddAssign || program[i+1].kind == SubAssign ||
              program[i+1].kind == MulAssign || program[i+1].kind == DivAssign || program[i+1].kind == ModAssign))
         {
             program[i].kind = (TKind)(program[i+1].kind + (AddAsLocal - AddAssign));
@@ -716,6 +705,7 @@ Program load_program(string text)
         {
             program[i].kind = ForLoopLabel;
             prog_erase(i-- + 1);
+            // need to be able to see the output of this optimization one token to the left, for the next optimization
             i--;
         }
         if (still_valid() && i + 2 < program.size() && program[i].kind == LocalVarLookup && program[i+1].kind == IntegerInline && program[i+2].kind == ForLoopLabel)
@@ -735,6 +725,9 @@ Program load_program(string text)
         }
     }
 
+    //for (auto & s : program)
+    //    printf("%d\n", s.kind);
+    
     funcs = vector<Func>(programdata.token_funcs.size());
     std::fill(funcs.begin(), funcs.end(), Func{0,0,0});
     
@@ -784,6 +777,7 @@ Program load_program(string text)
         }
     }
     
+    // rewrite global labels
     // this needs to be a separate pass because labels can be seen upwards, not just downwards
     for (i = 0; i < program.size() && program[i].kind != Exit; i++)
     {
@@ -802,7 +796,7 @@ Program load_program(string text)
 
 int interpret(const Program & programdata)
 {
-    auto & program = programdata.program;
+    auto program = programdata.program.data();
     auto & lines = programdata.lines;
     auto & funcs = programdata.funcs;
     
@@ -810,9 +804,7 @@ int interpret(const Program & programdata)
     for (size_t i = 0; i < programdata.token_varnames.size(); i++)
         vars_default.push_back(0);
     
-    //vector<pair<iword_t, bool>> callstack;
-    vector<iword_t> callstack;
-    vector<iword_t> fstack;
+    vector<iword_t> callstack, fstack;
     
     auto globals = make_shared<vector<DynamicType>>(vars_default);
     auto globals_raw = globals->data();
@@ -826,9 +818,10 @@ int interpret(const Program & programdata)
     
     fstack.push_back(0);
     
-    auto valpush = [&](DynamicType x) { evalstack.push_back(x); };
-    auto valpop = [&]() { return vec_pop_back(evalstack); };
-    auto valmap = [&](auto f) { f(evalstack.at(evalstack.size()-1)); };
+    //auto valpush = [&](DynamicType x) { evalstack.push_back(x); };
+    #define valpush(X) evalstack.push_back(X)
+    #define valpop() vec_pop_back(evalstack)
+    #define valback() (vec_at_back(evalstack))
     
     int i = 0;
     try
@@ -848,22 +841,10 @@ int interpret(const Program & programdata)
         #else // of ifdef INTERPRETER_USE_LOOP
         
         static const void * const handlers[] = {
-            &&HandlerGlobalVar,
-            &&HandlerGlobalVarDec,
-            &&HandlerGlobalVarLookup,
-            &&HandlerGlobalVarDecLookup,
-            
-            &&HandlerLocalVar,
-            &&HandlerLocalVarDec,
-            &&HandlerLocalVarLookup,
-            &&HandlerLocalVarDecLookup,
-            
-            &&HandlerFuncDec,
-            &&HandlerFuncLookup,
-            &&HandlerFuncEnd,
-            
-            &&HandlerLabelDec,
-            &&HandlerLabelLookup,
+            &&HandlerGlobalVar, &&HandlerGlobalVarDec, &&HandlerGlobalVarLookup, &&HandlerGlobalVarDecLookup,
+            &&HandlerLocalVar, &&HandlerLocalVarDec, &&HandlerLocalVarLookup, &&HandlerLocalVarDecLookup,
+            &&HandlerFuncDec, &&HandlerFuncLookup, &&HandlerFuncEnd,
+            &&HandlerLabelDec, &&HandlerLabelLookup,
             
             &&HandlerInteger,
             &&HandlerIntegerInline,
@@ -875,6 +856,8 @@ int interpret(const Program & programdata)
             &&HandlerAdd, &&HandlerSub, &&HandlerMul, &&HandlerDiv, &&HandlerMod,
             &&HandlerAddAssign, &&HandlerSubAssign, &&HandlerMulAssign, &&HandlerDivAssign, &&HandlerModAssign,
             &&HandlerAddAsLocal, &&HandlerSubAsLocal, &&HandlerMulAsLocal, &&HandlerDivAsLocal, &&HandlerModAsLocal,
+            &&HandlerAddIntInline, &&HandlerSubIntInline, &&HandlerMulIntInline, &&HandlerDivIntInline, &&HandlerModIntInline,
+            &&HandlerAddDubInline, &&HandlerSubDubInline, &&HandlerMulDubInline, &&HandlerDivDubInline, &&HandlerModDubInline,
             
             &&HandlerAnd, &&HandlerOr, &&HandlerXor,
             &&HandlerShl, &&HandlerShr,
@@ -882,24 +865,18 @@ int interpret(const Program & programdata)
             
             &&HandlerAssign,
             &&HandlerAsLocal,
-            &&HandlerReturn,
-            &&HandlerCall,
+            &&HandlerReturn, &&HandlerCall,
             
-            &&HandlerIfGoto,
-            &&HandlerIfGotoLabel,
+            &&HandlerIfGoto, &&HandlerIfGotoLabel,
             
             &&HandlerIfGotoLabelEQ, &&HandlerIfGotoLabelNE, &&HandlerIfGotoLabelLE,
             &&HandlerIfGotoLabelGE, &&HandlerIfGotoLabelLT, &&HandlerIfGotoLabelGT,
             
-            &&HandlerGoto,
-            &&HandlerGotoLabel,
+            &&HandlerGoto, &&HandlerGotoLabel,
             
-            &&HandlerForLoop,
-            &&HandlerForLoopLabel,
-            &&HandlerForLoopLocal,
+            &&HandlerForLoop, &&HandlerForLoopLabel, &&HandlerForLoopLocal,
             
-            &&HandlerScopeOpen,
-            &&HandlerScopeClose,
+            &&HandlerScopeOpen, &&HandlerScopeClose,
             
             &&HandlerCmpEQ, &&HandlerCmpNE, &&HandlerCmpLE, &&HandlerCmpGE, &&HandlerCmpLT, &&HandlerCmpGT,
             
@@ -908,11 +885,7 @@ int interpret(const Program & programdata)
             &&HandlerClone,
             &&HandlerCloneDeep,
             
-            &&HandlerArrayLen,
-            &&HandlerArrayLenMinusOne,
-            &&HandlerArrayPushIn,
-            &&HandlerArrayPopOut,
-            &&HandlerArrayConcat,
+            &&HandlerArrayLen, &&HandlerArrayLenMinusOne, &&HandlerArrayPushIn, &&HandlerArrayPopOut, &&HandlerArrayConcat,
             
             &&HandlerStringLiteral,
             &&HandlerStringLitReference,
@@ -936,10 +909,10 @@ int interpret(const Program & programdata)
         
         #endif // else of ifdef INTERPRETER_USE_LOOP
         
-        
         #define INTERPRETER_MIDCASE(NAME) \
             INTERPRETER_ENDCASE()\
             INTERPRETER_CASE(NAME)
+        
         
         INTERPRETER_DEF()
         
@@ -1028,7 +1001,7 @@ int interpret(const Program & programdata)
             auto ref = std::move(valpop().as_ref());
             if (!num.is_int() || !ref.ref()->is_int())
                 throw std::runtime_error("Tried to use for loop with non-integer");
-            *ref.ref() = (*ref.ref()) + 1;
+            *ref.ref() = *ref.ref() + 1;
             if (*ref.ref() <= num)
                 i = n;
         INTERPRETER_MIDCASE(ForLoopLocal)
@@ -1038,78 +1011,66 @@ int interpret(const Program & programdata)
                 throw std::runtime_error("Tried to use for loop with non-integer");
             auto & v = _v.as_int();
             int64_t num = (iwordsigned_t)program[i-1].extra_2;
-            v = v + 1;
-            if (v <= num)
+            if (++v <= num)
                 i = n;
         
-        #define INTERPRETER_MIDCASE_GOTOLABELCMP(X, OP) \
+        // INTERPRETER_MIDCASE_GOTOLABELCMP
+        #define IMGLC(X, OP) \
         INTERPRETER_MIDCASE(IfGotoLabel##X)\
             auto val2 = valpop();\
             auto val1 = valpop();\
             if (val1 OP val2) i = n;
         
-        INTERPRETER_MIDCASE_GOTOLABELCMP(EQ, ==)
-        INTERPRETER_MIDCASE_GOTOLABELCMP(NE, !=)
-        INTERPRETER_MIDCASE_GOTOLABELCMP(LE, <=)
-        INTERPRETER_MIDCASE_GOTOLABELCMP(GE, >=)
-        INTERPRETER_MIDCASE_GOTOLABELCMP(LT, <)
-        INTERPRETER_MIDCASE_GOTOLABELCMP(GT, >)
-        
-        INTERPRETER_MIDCASE(Goto)
-            i = valpop().as_label().loc;
-        INTERPRETER_MIDCASE(GotoLabel)
-            i = n;
-        
-        #define INTERPRETER_MIDCASE_UNARY_SIMPLE(NAME, OP) \
+        // INTERPRETER_MIDCASE_UNARY_SIMPLE
+        #define IMCUS(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
             auto b = valpop();\
-            auto a = valpop();\
-            valpush(a OP b);
+            auto x = valpop();\
+            valpush(x OP b);
         
-        #define INTERPRETER_MIDCASE_UNARY_ASSIGN(NAME, OP) \
+        // INTERPRETER_MIDCASE_UNARY_INTINLINE
+        #define IMCUII(NAME, OP) \
+        INTERPRETER_MIDCASE(NAME)\
+            auto b = (int64_t)(iwordsigned_t)n;\
+            auto x = valpop();\
+            valpush(x OP b);
+        
+        // INTERPRETER_MIDCASE_UNARY_DUBINLINE
+        #define IMCUDI(NAME, OP) \
+        INTERPRETER_MIDCASE(NAME)\
+            uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;\
+            double d;\
+            memcpy(&d, &dec, sizeof(dec));\
+            auto x = valpop();\
+            valpush(x OP d);
+        
+        // INTERPRETER_MIDCASE_UNARY_ASSIGN
+        #define IMCUA(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
             Ref ref = std::move(valpop().as_ref());\
             auto a = valpop();\
             *ref.ref() = *ref.ref() OP a;
         
-        #define INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(NAME, OP) \
+        // INTERPRETER_MIDCASE_UNARY_ASSIGNLOC
+        #define IMCUAL(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
             auto a = valpop();\
             varstack_raw[n] = varstack_raw[n] OP a;
         
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Add, +)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Sub, -)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Mul, *)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Div, /)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Mod, %)
+        IMGLC(EQ, ==) IMGLC(NE, !=) IMGLC(LE, <=) IMGLC(GE, >=) IMGLC(LT, <) IMGLC(GT, >)
+        IMCUS(Add, +) IMCUS(Sub, -) IMCUS(Mul, *) IMCUS(Div, /) IMCUS(Mod, %)
+        IMCUS(And, &) IMCUS(Or,  |) IMCUS(Xor, ^) IMCUS(BoolAnd, &&) IMCUS(BoolOr, ||)
+        IMCUS(Shl, <<) IMCUS(Shr, >>)
+        IMCUS(CmpEQ, ==) IMCUS(CmpNE, !=) IMCUS(CmpLE, <=) IMCUS(CmpGE, >=) IMCUS(CmpLT, <) IMCUS(CmpGT, >)
+        IMCUII(AddIntInline, +) IMCUII(SubIntInline, -) IMCUII(MulIntInline, *) IMCUII(DivIntInline, /) IMCUII(ModIntInline, %)
+        IMCUDI(AddDubInline, +) IMCUDI(SubDubInline, -) IMCUDI(MulDubInline, *) IMCUDI(DivDubInline, /) IMCUDI(ModDubInline, %)
+        IMCUA(AddAssign, +) IMCUA(SubAssign, -) IMCUA(MulAssign, *) IMCUA(DivAssign, /) IMCUA(ModAssign, %)
+        IMCUAL(AddAsLocal, +) IMCUAL(SubAsLocal, -) IMCUAL(MulAsLocal, *) IMCUAL(DivAsLocal, /) IMCUAL(ModAsLocal, %)
         
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(And, &)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Or,  |)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Xor, ^)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(BoolAnd, &&)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(BoolOr, ||)
-        
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Shl, <<)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(Shr, >>)
-        
-        INTERPRETER_MIDCASE_UNARY_ASSIGN(AddAssign, +)
-        INTERPRETER_MIDCASE_UNARY_ASSIGN(SubAssign, -)
-        INTERPRETER_MIDCASE_UNARY_ASSIGN(MulAssign, *)
-        INTERPRETER_MIDCASE_UNARY_ASSIGN(DivAssign, /)
-        INTERPRETER_MIDCASE_UNARY_ASSIGN(ModAssign, %)
-        
-        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(AddAsLocal, +)
-        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(SubAsLocal, -)
-        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(MulAsLocal, *)
-        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(DivAsLocal, /)
-        INTERPRETER_MIDCASE_UNARY_ASSIGNLOC(ModAsLocal, %)
-        
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpEQ, ==)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpNE, !=)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpLE, <=)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpGE, >=)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpLT, <)
-        INTERPRETER_MIDCASE_UNARY_SIMPLE(CmpGT, >)
+        INTERPRETER_MIDCASE(Goto)
+            i = valpop().as_label().loc;
+        INTERPRETER_MIDCASE(GotoLabel)
+            i = n;
         
         INTERPRETER_MIDCASE(IntegerInline)
             valpush((int64_t)(iwordsigned_t)n);
@@ -1121,8 +1082,7 @@ int interpret(const Program & programdata)
             valpush((int64_t)programdata.get_token_int(n));
         
         INTERPRETER_MIDCASE(DoubleInline)
-            const auto x = 8 * (sizeof(uint64_t)-sizeof(iword_t));
-            uint64_t dec = ((uint64_t)n) << x;
+            uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;
             double d;
             memcpy(&d, &dec, sizeof(dec));
             valpush(d);
@@ -1144,22 +1104,26 @@ int interpret(const Program & programdata)
             auto i = valpop().as_into_int();
             auto val = valpop();
             auto a = val.as_array_ptr_thru_ref();
-            
+            // FIXME use valback?
             if (val.is_array())
                 valpush((*a->items()).at(i));
             else
                 valpush({make_ref(a->items(), (size_t)i)});
         
         INTERPRETER_MIDCASE(Clone)
-            valmap([](auto & x) { x = x.clone(false); });
+            auto & x = valback();
+            x = x.clone(false);
         INTERPRETER_MIDCASE(CloneDeep)
-            valmap([](auto & x) { x = x.clone(true); });
+            auto & x = valback();
+            x = x.clone(true);
         
         INTERPRETER_MIDCASE(ArrayLen)
-            valmap([](auto & a) { a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size()); });
+            auto & a = valback();
+            a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size());
         
         INTERPRETER_MIDCASE(ArrayLenMinusOne)
-            valmap([](auto & a) { a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1); });
+            auto & a = valback();
+            a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1);
         
         INTERPRETER_MIDCASE(ArrayPushIn)
             auto inval = valpop();
@@ -1176,7 +1140,7 @@ int interpret(const Program & programdata)
             a->dirtify();
             auto ret = (*a->items()).at(i);
             a->items()->erase(a->items()->begin() + i);
-            valpush(ret);
+            valpush(ret); // FIXME use valmap
         
         INTERPRETER_MIDCASE(ArrayConcat)
             auto vr = valpop();
@@ -1187,7 +1151,7 @@ int interpret(const Program & programdata)
             
             newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
             newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
-            valpush(newarray);
+            valpush(newarray); // FIXME use valmap
         
         INTERPRETER_MIDCASE(StringLiteral)
             valpush(make_array(std::make_shared<vector<DynamicType>>(programdata.get_token_stringval(n))));

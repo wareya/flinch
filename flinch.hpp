@@ -15,6 +15,10 @@
 #include <unordered_map>
 #include <initializer_list>
 
+#ifndef NOINLINE
+#define NOINLINE __attribute__((noinline))
+#endif
+
 template <typename T> T vec_pop_back(std::vector<T> & v)
 {
     T ret = std::move(v.back());
@@ -106,22 +110,41 @@ struct Func { iword_t loc, len, name; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
-#ifdef MEMORY_SAFE_REFERENCES
+#ifndef MEMORY_UNSAFE_REFERENCES
 struct Ref {
-    shared_ptr<vector<DynamicType>> backing;
-    DynamicType * refdata;
-    DynamicType * ref() { return refdata; }
+    struct RefInfo {
+        // this backing vector will never be resized or reallocated, so it's OK to store a pointer directly into it
+        shared_ptr<vector<DynamicType>> backing;
+        DynamicType * refdata;
+        size_t n = 0;
+    };
+    RefInfo * info;
+    DynamicType * ref() { return info->refdata; }
     ~Ref();
+    
+    Ref(RefInfo * r) noexcept : info(r) { }
+    Ref(const Ref& r) noexcept;
+    Ref(Ref&& r) noexcept;
+    Ref & operator=(const Ref& r) noexcept;
+    Ref & operator=(Ref&& r) noexcept;
 };
 
-__attribute__((noinline)) Ref::~Ref() { }
+NOINLINE Ref::~Ref() { if (!info) return; info->n--; if (!info->n) delete info; }
 
-#define MAKEREF return Ref{backing, &(*backing).at(i)};
+Ref::Ref(const Ref& r) noexcept { info = r.info; info->n++; }
+Ref::Ref(Ref&& r) noexcept { info = r.info; r.info = nullptr; }
+Ref & Ref::operator=(const Ref& r) noexcept { info = r.info; info->n++; return *this; }
+Ref & Ref::operator=(Ref&& r) noexcept { info = r.info; r.info = nullptr; return *this; }
+
+#define MAKEREF return Ref{new Ref::RefInfo{backing, &(*backing).at(i), 1}};
 #else // MEMORY_SAFE_REFERENCES
 struct Ref {
     DynamicType * refdata;
     DynamicType * ref() { return refdata; }
+    ~Ref();
 };
+NOINLINE Ref::~Ref() { } // ???? why does  this make the interpreter faster
+
 #define MAKEREF return Ref{&(*backing).at(i)};
 #endif // MEMORY_SAFE_REFERENCES
 
@@ -136,7 +159,7 @@ struct Array {
     // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
     void dirtify() { if (!_items->unique()) *_items = make_shared<vector<DynamicType>>(**_items); }
 };
-__attribute__((noinline)) Array::~Array() { }
+NOINLINE Array::~Array() { }
 
 inline Array make_array(shared_ptr<vector<DynamicType>> && backing)
 {

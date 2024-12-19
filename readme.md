@@ -138,25 +138,23 @@ static inline int builtins_lookup(const string & s) { throw runtime_error("Unkno
 Using the "too simple" pi calculation benchmark (with fewer iterations than the benchmark game does):
 
 ```
+$ hyperfine "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" --warmup 3
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     234.6 ms ±   2.1 ms    [User: 229.5 ms, System: 6.1 ms]
-  Range (min … max):   232.2 ms … 238.6 ms    12 runs
+  Time (mean ± σ):     232.8 ms ±   2.0 ms    [User: 228.2 ms, System: 4.6 ms]
+  Range (min … max):   230.8 ms … 238.3 ms    12 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      78.5 ms ±   2.7 ms    [User: 73.8 ms, System: 5.1 ms]
-  Range (min … max):    76.5 ms …  89.2 ms    37 runs
-
-  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other program
-s. It might help to use the '--warmup' or '--prepare' options.
+  Time (mean ± σ):      77.8 ms ±   1.1 ms    [User: 73.7 ms, System: 4.3 ms]
+  Range (min … max):    76.3 ms …  81.2 ms    36 runs
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.280 s ±  0.012 s    [User: 1.280 s, System: 0.006 s]
-  Range (min … max):    1.267 s …  1.302 s    10 runs
+  Time (mean ± σ):      1.279 s ±  0.030 s    [User: 1.274 s, System: 0.007 s]
+  Range (min … max):    1.256 s …  1.360 s    10 runs
 
 Summary
   lua etc/too_simple.lua ran
-    2.99 ± 0.10 times faster than a.exe examples/too_simple_2_shunting.fl
-   16.30 ± 0.57 times faster than python etc/too_simple.py
+    2.99 ± 0.05 times faster than a.exe examples/too_simple_2_shunting.fl
+   16.44 ± 0.44 times faster than python etc/too_simple.py
 ```
 
 ## License

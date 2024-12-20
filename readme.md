@@ -33,40 +33,34 @@ calc_pi^
     
     ( sum * 4.0 ) return
 ^^
-
-^calc_pi call_eval
-
-$ret$ ->
-ret !print
-ret
 ```
 
-Pi calculation with only RPN/concatenation:
+Currying with references to emulate a closure (prints 1 2 3 4 5):
 
 ```R
-calc_pi^
-    0.0 $sum$ ->
-    -1.0 $flip$ ->
-    1 $i$ ->
-    
-    :loopend goto
-    
-    loopstart:
-    -1.0 $flip *=
-    flip i 2 * 1 - / $sum +=
-    1 $i +=
-    
-    loopend:
-    i 10000000 <= :loopstart if_goto
-    
-    4.0 sum * return
+inc_and_print^
+    $n$ -> # bind top of stack (which we hope is a reference) to a var
+    1 n += # increment the underlying value behind the reference
+    n :: !print # print it (:: clones it first)
 ^^
 
-^calc_pi call_eval
+make_fake_closure^
+    $x$
+    [ $x ^inc_and_print ]
+^^
 
-$ret$ ->
-ret !print
-ret
+bound_call^
+    ^^dump
+    call
+^^
+
+^^make_fake_closure $curried$ ->
+
+curried ^^bound_call
+curried ^^bound_call
+curried ^^bound_call
+curried ^^bound_call
+curried ^^bound_call
 ````
 
 ## FAQ

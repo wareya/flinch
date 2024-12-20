@@ -19,6 +19,7 @@
 #define NOINLINE __attribute__((noinline))
 #endif
 
+//#define THROWSTR(X) throw runtime_error(X)
 #define THROWSTR(X) throw (X)
 
 template <typename T> T vec_pop_back(std::vector<T> & v)
@@ -134,8 +135,8 @@ shared_ptr<vector<DynamicType>> make_array_data() { return make_shared<vector<Dy
 
 struct Label { int loc; };
 struct Array {
-    shared_ptr<ArrayData> _items;
-    ArrayData & items() { return *_items; }
+    ArrayData ** _items;
+    ArrayData & items() { return **_items; }
     ~Array();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
@@ -145,7 +146,7 @@ struct Array {
 };
 NOINLINE Array::~Array() { }
 
-inline Array make_array(ArrayData && backing) { return Array { make_shared<ArrayData>(backing) };}
+inline Array make_array(ArrayData && backing) { return Array { new ArrayData * (new ArrayData(backing)) };}
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -250,7 +251,7 @@ struct DynamicType {
         while (is_ref()) *this = *as_ref().ref();
         if (!is_array()) return *this;
         auto t = make_array_data(*as_array().items());
-        as_array()._items = make_shared<ArrayData>(t);
+        as_array()._items = new ArrayData * (new ArrayData(t));
         if (!deep) return *this;
         for (auto & item : *as_array().items()) item = item.clone(deep);
         return *this;
@@ -259,7 +260,7 @@ struct DynamicType {
 
 inline Ref make_ref(ArrayData & backing, size_t i) { MAKEREF }
 
-void Array::dirtify() { if (!_items->unique()) *_items = make_array_data(**_items); }
+void Array::dirtify() { if (!(*_items)->unique()) *_items = new ArrayData(make_array_data(***_items)); }
 
 struct Program {
     vector<Token> program;
@@ -538,8 +539,8 @@ Program load_program(string text)
             var_defs.push_back({});
             program.push_back(make_token(FuncDec, programdata.get_token_func_num(token.substr(0, token.size() - 1))));
         }
-        else if (token != "." && token.size() >= 3 && token.front() == '^' && token[1] == '^')
-            program.push_back(make_token(FuncCall, programdata.get_token_func_num(token.substr(2))));
+        else if (token.size() >= 2 && token.front() == '.')
+            program.push_back(make_token(FuncCall, programdata.get_token_func_num(token.substr(1))));
         else if (token != "^^" && token.size() >= 2 && token.front() == '^')
             program.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
         else if (token == "^^")

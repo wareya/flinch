@@ -110,20 +110,20 @@ struct Ref {
         // this backing vector will never be resized or reallocated, so it's OK to store a pointer directly into it
         ArrayData backing;
         DynamicType * refdata;
-        size_t n = 0;
+        size_t n;
     };
     RefInfo * info;
     DynamicType * ref() { return info->refdata; }
     ~Ref();
     
     Ref(RefInfo * r) noexcept : info(r) { }
-    NOINLINE Ref(const Ref& r) noexcept { info = r.info; info->n++; }
+    NOINLINE Ref(const Ref& r) noexcept { info = r.info; info->n += 1; }
     Ref(Ref&& r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Ref & operator=(const Ref& r) noexcept { info = r.info; info->n++; return *this; }
+    NOINLINE Ref & operator=(const Ref& r) noexcept { info = r.info; info->n += 1; return *this; }
     Ref & operator=(Ref&& r) noexcept { info = r.info; r.info = nullptr; return *this; }
 };
 
-NOINLINE Ref::~Ref() { if (!info) return; info->n--; if (!info->n) delete info; }
+NOINLINE Ref::~Ref() { if (!info) return; info->n -= 1; if (!info->n) delete info; }
 
 #define MAKEREF return Ref{new Ref::RefInfo{backing, &(*backing).at(i), 1}};
 #else // MEMORY_SAFE_REFERENCES
@@ -145,12 +145,12 @@ struct Label { int loc; };
 struct Array {
     struct ArrayInfo {
         ArrayData items;
-        uint64_t n;
+        size_t n;
     };
     
     static ArrayInfo * make_arrayinfo(ArrayData && backing)
     {
-        return new Array::ArrayInfo{backing, 2};
+        return new Array::ArrayInfo{backing, 1};
     }
     
     ArrayInfo * info;
@@ -163,15 +163,14 @@ struct Array {
     void dirtify();
     
     Array(ArrayInfo * r) noexcept : info(r) { }
-    NOINLINE Array(const Array & r) noexcept { info = r.info; info->n += 2; }
+    NOINLINE Array(const Array & r) noexcept { info = r.info; info->n += 1; }
     Array(Array && r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Array & operator=(const Array & r) noexcept { info = r.info; info->n += 2; return *this; }
+    NOINLINE Array & operator=(const Array & r) noexcept { info = r.info; info->n += 1; return *this; }
     Array & operator=(Array && r) noexcept { info = r.info; r.info = nullptr; return *this; }
 };
 NOINLINE ArrayData & Array::items() { return info->items; }
 NOINLINE Array make_array(ArrayData && backing) { return Array { Array::make_arrayinfo(std::move(backing)) };}
-//NOINLINE Array::~Array() { if (!info) return; info->n--; if (!info->n) delete info; }
-NOINLINE Array::~Array() { info->n -= 2; }
+NOINLINE Array::~Array() { if (!info) return; info->n -= 1; if (!info->n) delete info; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -286,7 +285,7 @@ struct DynamicType {
 inline Ref make_ref(ArrayData & backing, size_t i) { MAKEREF }
 
 //NOINLINE void Array::dirtify() { if (info && info->n != 1) info->items = make_array_data(*info->items); }
-void Array::dirtify() { if (info && info->n > 2) info->items = make_array_data(*info->items); }
+void Array::dirtify() { if (info && info->n > 1) info->items = make_array_data(*info->items); }
 
 struct Program {
     vector<Token> program;

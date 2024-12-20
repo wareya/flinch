@@ -19,6 +19,8 @@
 #define NOINLINE __attribute__((noinline))
 #endif
 
+#define THROWSTR(X) throw (X)
+
 template <typename T> T vec_pop_back(std::vector<T> & v)
 {
     T ret = std::move(v.back());
@@ -100,11 +102,14 @@ struct Func { iword_t loc, len, name; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
+
+typedef shared_ptr<vector<DynamicType>> ArrayData;
+
 #ifndef MEMORY_UNSAFE_REFERENCES
 struct Ref {
     struct RefInfo {
         // this backing vector will never be resized or reallocated, so it's OK to store a pointer directly into it
-        shared_ptr<vector<DynamicType>> backing;
+        ArrayData backing;
         DynamicType * refdata;
         size_t n = 0;
     };
@@ -133,20 +138,24 @@ NOINLINE Ref::~Ref() { } // ???? why does  this make the interpreter faster
 #define MAKEREF return Ref{&(*backing).at(i)};
 #endif // MEMORY_SAFE_REFERENCES
 
+template <typename T>
+shared_ptr<vector<DynamicType>> make_array_data(T x) { return make_shared<vector<DynamicType>>(x); }
+shared_ptr<vector<DynamicType>> make_array_data() { return make_shared<vector<DynamicType>>(); }
+
 struct Label { int loc; };
 struct Array {
-    shared_ptr<shared_ptr<vector<DynamicType>>> _items;
-    shared_ptr<vector<DynamicType>> & items() { return *_items; }
+    shared_ptr<ArrayData> _items;
+    ArrayData & items() { return *_items; }
     ~Array();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
     // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
     // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
-    void dirtify() { if (!_items->unique()) *_items = make_shared<vector<DynamicType>>(**_items); }
+    void dirtify();
 };
 NOINLINE Array::~Array() { }
 
-inline Array make_array(shared_ptr<vector<DynamicType>> && backing) { return Array { make_shared<shared_ptr<vector<DynamicType>>>(backing) };}
+inline Array make_array(ArrayData && backing) { return Array { make_shared<ArrayData>(backing) };}
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -177,7 +186,7 @@ struct DynamicType {
             return WRAPPER2(WX(std::get<int64_t>(value)) OP2 WX(std::get<double>(other.value)));\
         else if (std::holds_alternative<double>(value) && std::holds_alternative<int64_t>(other.value))\
             return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<int64_t>(other.value)));\
-        else throw std::runtime_error("Unsupported operation: non-numeric operands for operator " #OP " (or maybe) " #OP2);
+        else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP " (or maybe) " #OP2);
     
     #define COMMA ,
     
@@ -208,7 +217,7 @@ struct DynamicType {
     TYPE & as_##TYPENAME()\
     {\
         if (std::holds_alternative<TYPE>(value)) return std::get<TYPE>(value);\
-        throw std::runtime_error("Value is not of type " #TYPENAME);\
+        THROWSTR("Value is not of type " #TYPENAME);\
     }
     
     AS_TYPE_X(int64_t, int)
@@ -229,14 +238,14 @@ struct DynamicType {
     {
         if (is_int()) return as_int();
         if (is_double()) return as_double();
-        throw std::runtime_error("Value is not of a numeric type");
+        THROWSTR("Value is not of a numeric type");
     }
     
     Array * as_array_ptr_thru_ref()
     {
         if (is_array()) return &as_array();
         else if (is_ref() && as_ref().ref()->is_array()) return &as_ref().ref()->as_array();
-        else throw std::runtime_error("Tried to use a non-array value as an array");
+        else THROWSTR("Tried to use a non-array value as an array");
     }
         
     explicit operator bool() const
@@ -250,15 +259,17 @@ struct DynamicType {
     {
         while (is_ref()) *this = *as_ref().ref();
         if (!is_array()) return *this;
-        auto t = make_shared<vector<DynamicType>>(*as_array().items());
-        as_array()._items = make_shared<shared_ptr<vector<DynamicType>>>(t);
+        auto t = make_array_data(*as_array().items());
+        as_array()._items = make_shared<ArrayData>(t);
         if (!deep) return *this;
         for (auto & item : *as_array().items()) item = item.clone(deep);
         return *this;
     }
 };
 
-inline Ref make_ref(shared_ptr<vector<DynamicType>> & backing, size_t i) { MAKEREF }
+inline Ref make_ref(ArrayData & backing, size_t i) { MAKEREF }
+
+void Array::dirtify() { if (!_items->unique()) *_items = make_array_data(**_items); }
 
 struct Program {
     vector<Token> program;
@@ -284,7 +295,7 @@ struct Program {
     TOKEN_LOG(int, int64_t)
     TOKEN_LOG(double, double)
     TOKEN_LOG(stringval, vector<DynamicType>)
-    TOKEN_LOG(stringref, shared_ptr<vector<DynamicType>>)
+    TOKEN_LOG(stringref, ArrayData)
 };
 
 // built-in function definitions. must be specifically here. do not move.
@@ -320,7 +331,7 @@ Program load_program(string text)
             {
                 i += 3 + (text[i+1] == '\\');
                 if (i >= text.size() || i < start_i || text[i-1] != '\'')
-                    throw std::runtime_error("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(line));
+                    THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(line));
             }
             else if (text[i] == '"')
             {
@@ -350,7 +361,7 @@ Program load_program(string text)
                 if (text[++i] == '*') s += text[i++];
                 
                 if (!isspace(text[i]) && text[i] != 0)
-                    throw runtime_error("String literals must not have trailing text after the closing \" character");
+                    THROWSTR("String literals must not have trailing text after the closing \" character");
             }
             else
             {
@@ -452,7 +463,7 @@ Program load_program(string text)
         while (ops.size()) nums.push_back(vec_pop_back(ops));
         
         if (i >= program_texts.size())
-            throw std::runtime_error("Paren expression must end in a closing paren, i.e. ')', starting on or near line " + to_string(lines[start_i]));
+            THROWSTR("Paren expression must end in a closing paren, i.e. ')', starting on or near line " + to_string(lines[start_i]));
         
         // parallel move; we go through this effort to keep lines and texts in sync
         vector<string> texts_s;
@@ -537,7 +548,7 @@ Program load_program(string text)
             var_defs.push_back({});
             program.push_back(make_token(FuncDec, programdata.get_token_func_num(token.substr(0, token.size() - 1))));
         }
-        else if (token != "^^" && token.size() >= 3 && token.front() == '^' && token[1] == '^')
+        else if (token != "." && token.size() >= 3 && token.front() == '^' && token[1] == '^')
             program.push_back(make_token(FuncCall, programdata.get_token_func_num(token.substr(2))));
         else if (token != "^^" && token.size() >= 2 && token.front() == '^')
             program.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
@@ -577,7 +588,7 @@ Program load_program(string text)
             else if (var_is_global(s))
                 program.push_back(make_token(GlobalVarLookup, n));
             else
-                throw std::runtime_error("Undefined variable " + s + " on line " + std::to_string(lines[i]));
+                THROWSTR("Undefined variable " + s + " on line " + std::to_string(lines[i]));
         }
         else if (token.front() == ':' && token.size() >= 2 && token != "::" && token != "::!")
             program.push_back(make_token(LabelLookup, programdata.get_token_string_num(token.substr(1))));
@@ -587,7 +598,7 @@ Program load_program(string text)
             program.push_back(make_token(trivial_ops[token], 0));
         else if (token.size() >= 3 && token[0] == '"' && token.back() == '*') // '"' (fix tokei line counts)
         {
-            std::vector<DynamicType> str = {};
+            vector<DynamicType> str = {};
             for (size_t i = 1; i < token.size() - 2; i++)
                 str.push_back((int64_t)token[i]);
             auto n = programdata.get_token_stringval_num(std::move(str));
@@ -595,7 +606,7 @@ Program load_program(string text)
         }
         else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
         {
-            auto str = make_shared<std::vector<DynamicType>>();
+            auto str = make_array_data();
             for (size_t i = 1; i < token.size() - 1; i++)
                 str->push_back((int64_t)token[i]);
             auto n = programdata.get_token_stringref_num(str);
@@ -609,7 +620,7 @@ Program load_program(string text)
         else if ((token.size() == 3 || token.size() == 4) && token[0] == '\'' && token.back() == '\'')
         {
             if (token.size() == 3) program.push_back(make_token(IntegerInline, token[1]));
-            else if (token.size() != 4 || token[1] != '\\') throw std::runtime_error("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(lines[i]));
+            else if (token.size() != 4 || token[1] != '\\') THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(lines[i]));
             else if (token[2] == 'n') program.push_back(make_token(IntegerInline, '\n'));
             else if (token[2] == 'r') program.push_back(make_token(IntegerInline, '\r'));
             else if (token[2] == 't') program.push_back(make_token(IntegerInline, '\t'));
@@ -658,10 +669,10 @@ Program load_program(string text)
                 if (var_is_local(token) || var_is_global(token))
                     program.push_back(make_token(var_is_local(token) ? LocalVar : GlobalVar, n));
                 else
-                    throw std::runtime_error("Undefined variable " + token + " on line " + std::to_string(lines[i]));
+                    THROWSTR("Undefined variable " + token + " on line " + std::to_string(lines[i]));
             }
             else
-                throw runtime_error("Invalid token: " + token);
+                THROWSTR("Invalid token: " + token);
         }
     }
     program.push_back(make_token(Exit, 0));
@@ -743,7 +754,7 @@ Program load_program(string text)
         if (program[i].kind == FuncDec)
         {
             if (funcs[program[i].n].name != 0)
-                throw std::runtime_error("Redefined function on or near line " + std::to_string(lines[i]));
+                THROWSTR("Redefined function on or near line " + std::to_string(lines[i]));
             
             vector<iword_t> labels(programdata.token_strings.size());
             std::fill(labels.begin(), labels.end(), (iword_t)-1);
@@ -766,7 +777,7 @@ Program load_program(string text)
                 {
                     program[i2].n = labels[program[i2].n];
                     if(program[i2].n == (iword_t)-1)
-                        throw std::runtime_error("Unknown label usage on or near line " + std::to_string(lines[i2]));
+                        THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i2]));
                 }
             }
             funcs[program[i].n] = Func{(iword_t)(i + 1), (iword_t)(i2 - i), program[i].n};
@@ -790,7 +801,7 @@ Program load_program(string text)
         {
             program[i].n = root_labels[program[i].n];
             if (program[i].n == (iword_t)-1)
-                throw std::runtime_error("Unknown label usage on or near line " + std::to_string(lines[i]));
+                THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i]));
         }
     }
     return programdata;
@@ -808,11 +819,11 @@ int interpret(const Program & programdata)
     
     vector<iword_t> callstack, fstack;
     
-    auto globals = make_shared<vector<DynamicType>>(vars_default);
+    auto globals = make_array_data(vars_default);
     auto globals_raw = globals->data();
     
-    vector<shared_ptr<vector<DynamicType>>> varstacks;
-    auto varstack = make_shared<vector<DynamicType>>(vars_default);
+    vector<ArrayData> varstacks;
+    auto varstack = make_array_data(vars_default);
     auto varstack_raw = varstack->data();
     
     vector<vector<DynamicType>> evalstacks;
@@ -820,10 +831,11 @@ int interpret(const Program & programdata)
     
     fstack.push_back(0);
     
-    //auto valpush = [&](DynamicType x) { evalstack.push_back(x); };
+    #define valreq(X) if (evalstack.size() < X) THROWSTR("internal interpreter error: not enough values on stack");
+    //#define valreq(X)
     #define valpush(X) evalstack.push_back(X)
     #define valpop() vec_pop_back(evalstack)
-    #define valback() (vec_at_back(evalstack))
+    #define valback() vec_at_back(evalstack)
     
     int i = 0;
     try
@@ -832,13 +844,12 @@ int interpret(const Program & programdata)
         
         #define INTERPRETER_NEXT()
         #define INTERPRETER_DEF()\
-            i = 0;\
             while (1) {\
                 auto n = program[i].n;\
                 switch (program[i].kind) {
         #define INTERPRETER_CASE(NAME) case NAME: i += 1; {
         #define INTERPRETER_ENDCASE() } break;
-        #define INTERPRETER_ENDDEF() default: throw std::runtime_error("internal interpreter error: unknown opcode"); } }
+        #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } }
         
         #else // of ifdef INTERPRETER_USE_LOOP
         
@@ -914,7 +925,7 @@ int interpret(const Program & programdata)
         #define INTERPRETER_MIDCASE(NAME) \
             INTERPRETER_ENDCASE()\
             INTERPRETER_CASE(NAME)
-        
+        #define INTERPRETER_DOEXIT() goto INTERPRETER_EXIT
         
         INTERPRETER_DEF()
         
@@ -955,14 +966,14 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(LabelLookup)
             valpush(Label{(int)n});
         INTERPRETER_MIDCASE(LabelDec)
-            throw std::runtime_error("internal interpreter error: tried to execute opcode that's supposed to be deleted");
+            THROWSTR("internal interpreter error: tried to execute opcode that's supposed to be deleted");
         
         INTERPRETER_MIDCASE(Call)
             Func f = valpop().as_func();
             callstack.push_back(i);
             fstack.push_back(f.name);
             varstacks.push_back(varstack);
-            varstack = make_shared<vector<DynamicType>>(vars_default);
+            varstack = make_array_data(vars_default);
             varstack_raw = varstack->data();
             i = f.loc;
         
@@ -971,11 +982,12 @@ int interpret(const Program & programdata)
             callstack.push_back(i);
             fstack.push_back(f.name);
             varstacks.push_back(varstack);
-            varstack = make_shared<vector<DynamicType>>(vars_default);
+            varstack = make_array_data(vars_default);
             varstack_raw = varstack->data();
             i = f.loc;
         
         INTERPRETER_MIDCASE(Assign)
+            valreq(2);
             Ref ref = std::move(valpop().as_ref());
             auto val = valpop();
             *ref.ref() = val;
@@ -991,6 +1003,7 @@ int interpret(const Program & programdata)
             evalstack = vec_pop_back(evalstacks);
         
         INTERPRETER_MIDCASE(IfGoto)
+            valreq(2);
             Label dest = valpop().as_label();
             auto val = valpop();
             if (val) i = dest.loc;
@@ -999,19 +1012,21 @@ int interpret(const Program & programdata)
             if (val) i = n;
         
         INTERPRETER_MIDCASE(ForLoop)
+            valreq(3);
             Label dest = valpop().as_label();
             auto num = valpop();
             auto ref = std::move(valpop().as_ref());
             if (!num.is_int() || !ref.ref()->is_int())
-                throw std::runtime_error("Tried to use for loop with non-integer");
+                THROWSTR("Tried to use for loop with non-integer");
             *ref.ref() = *ref.ref() + 1;
             if (*ref.ref() < num)
                 i = dest.loc;
         INTERPRETER_MIDCASE(ForLoopLabel)
+            valreq(2);
             auto num = valpop();
             auto ref = std::move(valpop().as_ref());
             if (!num.is_int() || !ref.ref()->is_int())
-                throw std::runtime_error("Tried to use for loop with non-integer");
+                THROWSTR("Tried to use for loop with non-integer");
             *ref.ref() = *ref.ref() + 1;
             if (*ref.ref() < num)
                 i = n;
@@ -1019,7 +1034,7 @@ int interpret(const Program & programdata)
             // FIXME: add a global version
             auto & _v = varstack_raw[program[i-1].extra_1];
             if (!_v.is_int())
-                throw std::runtime_error("Tried to use for loop with non-integer");
+                THROWSTR("Tried to use for loop with non-integer");
             auto & v = _v.as_int();
             int64_t num = (iwordsigned_t)program[i-1].extra_2;
             if (++v < num)
@@ -1028,6 +1043,7 @@ int interpret(const Program & programdata)
         // INTERPRETER_MIDCASE_GOTOLABELCMP
         #define IMGLC(X, OP) \
         INTERPRETER_MIDCASE(IfGotoLabel##X)\
+            valreq(2);\
             auto val2 = valpop();\
             auto val1 = valpop();\
             if (val1 OP val2) i = n;
@@ -1035,6 +1051,7 @@ int interpret(const Program & programdata)
         // INTERPRETER_MIDCASE_UNARY_SIMPLE
         #define IMCUS(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
+            valreq(2);\
             auto b = valpop();\
             auto x = valpop();\
             valpush(x OP b);
@@ -1058,6 +1075,7 @@ int interpret(const Program & programdata)
         // INTERPRETER_MIDCASE_UNARY_ASSIGN
         #define IMCUA(NAME, OP) \
         INTERPRETER_MIDCASE(NAME)\
+            valreq(2);\
             Ref ref = std::move(valpop().as_ref());\
             auto a = valpop();\
             *ref.ref() = *ref.ref() OP a;
@@ -1109,9 +1127,10 @@ int interpret(const Program & programdata)
         INTERPRETER_MIDCASE(ArrayBuild)
             auto back = std::move(evalstack);
             evalstack = vec_pop_back(evalstacks);
-            valpush(make_array(std::make_shared<vector<DynamicType>>(std::move(back))));
+            valpush(make_array(make_array_data(std::move(back))));
         
         INTERPRETER_MIDCASE(ArrayIndex)
+            valreq(2);
             auto i = valpop().as_into_int();
             auto val = valpop();
             auto a = val.as_array_ptr_thru_ref();
@@ -1137,6 +1156,7 @@ int interpret(const Program & programdata)
             a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1);
         
         INTERPRETER_MIDCASE(ArrayPushIn)
+            valreq(3);
             auto inval = valpop();
             auto i = valpop().as_into_int();
             auto v = valpop();
@@ -1145,6 +1165,7 @@ int interpret(const Program & programdata)
             a->items()->insert(a->items()->begin() + i, inval);
         
         INTERPRETER_MIDCASE(ArrayPopOut)
+            valreq(2);
             auto i = valpop().as_into_int();
             auto v = valpop();
             Array * a = v.as_array_ptr_thru_ref();
@@ -1154,18 +1175,19 @@ int interpret(const Program & programdata)
             valpush(ret); // FIXME use valmap
         
         INTERPRETER_MIDCASE(ArrayConcat)
+            valreq(2);
             auto vr = valpop();
             Array * ar = vr.as_array_ptr_thru_ref();
             auto vl = valpop();
             Array * al = vl.as_array_ptr_thru_ref();
-            auto newarray = make_array(std::make_shared<vector<DynamicType>>());
+            auto newarray = make_array(make_array_data());
             
             newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
             newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
             valpush(newarray); // FIXME use valmap
         
         INTERPRETER_MIDCASE(StringLiteral)
-            valpush(make_array(std::make_shared<vector<DynamicType>>(programdata.get_token_stringval(n))));
+            valpush(make_array(make_array_data(programdata.get_token_stringval(n))));
         
         INTERPRETER_MIDCASE(StringLitReference)
             valpush(make_array(programdata.get_token_stringref(n)));
@@ -1174,18 +1196,18 @@ int interpret(const Program & programdata)
             builtins[n](evalstack);
         
         INTERPRETER_MIDCASE(Punt)
-            if (evalstacks.size() == 0) throw std::runtime_error("Tried to punt when only one evaluation stack was open");
+            if (evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
             evalstacks.back().push_back(valpop());
             
         INTERPRETER_MIDCASE(PuntN)
-            if (evalstacks.size() == 0) throw std::runtime_error("Tried to punt when only one evaluation stack was open");
+            if (evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
             size_t count = valpop().as_into_int();
             for (size_t i = 0; i < count; i++)
                 evalstacks.back().push_back(valpop());
             std::reverse(evalstacks.back().end() - count, evalstacks.back().end());
         
         INTERPRETER_MIDCASE(Exit)
-            goto INTERPRETER_EXIT;
+            INTERPRETER_DOEXIT();
             
         INTERPRETER_ENDCASE()
         INTERPRETER_ENDDEF()
@@ -1194,7 +1216,7 @@ int interpret(const Program & programdata)
     }
     catch (const exception& e)
     {
-        throw std::runtime_error("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");
+        THROWSTR("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");
     }
     return 0;
 }

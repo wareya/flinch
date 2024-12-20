@@ -38,64 +38,54 @@ typedef uint32_t iword_t;
 typedef  int32_t iwordsigned_t;
 const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 
+#define TOKEN_TABLE \
+PFX(GlobalVar),PFX(GlobalVarDec),PFX(GlobalVarLookup),PFX(GlobalVarDecLookup),\
+PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
+PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),\
+PFX(LabelDec),PFX(LabelLookup),\
+PFX(Integer),\
+PFX(IntegerInline),\
+PFX(IntegerInlineBigDec),\
+PFX(IntegerInlineBigBin),\
+PFX(Double),\
+PFX(DoubleInline),\
+PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
+PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
+PFX(AddAsLocal),PFX(SubAsLocal),PFX(MulAsLocal),PFX(DivAsLocal),PFX(ModAsLocal),\
+PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
+PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
+PFX(And),PFX(Or),PFX(Xor),\
+PFX(Shl),PFX(Shr),\
+PFX(BoolAnd),PFX(BoolOr),\
+PFX(Assign),\
+PFX(AsLocal),\
+PFX(Return),PFX(Call),\
+PFX(IfGoto),PFX(IfGotoLabel),\
+PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),\
+PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
+PFX(Goto),PFX(GotoLabel),\
+PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
+PFX(ScopeOpen),PFX(ScopeClose),\
+PFX(CmpEQ),PFX(CmpNE),PFX(CmpLE),PFX(CmpGE),PFX(CmpLT),PFX(CmpGT),\
+PFX(ArrayBuild),\
+PFX(ArrayIndex),\
+PFX(Clone),\
+PFX(CloneDeep),\
+PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
+PFX(StringLiteral),\
+PFX(StringLitReference),\
+PFX(BuiltinCall),\
+PFX(Punt),\
+PFX(PuntN),\
+PFX(Exit)
+
 // token kind
+#define PFX(X) X
 enum TKind : iword_t {
-    GlobalVar, GlobalVarDec, GlobalVarLookup, GlobalVarDecLookup,
-    LocalVar, LocalVarDec, LocalVarLookup, LocalVarDecLookup,
-    FuncDec, FuncLookup, FuncCall, FuncEnd,
-    LabelDec, LabelLookup,
-    
-    Integer,
-    IntegerInline,
-    IntegerInlineBigDec,
-    IntegerInlineBigBin,
-    Double,
-    DoubleInline,
-    
-    Add, Sub, Mul, Div, Mod,
-    AddAssign, SubAssign, MulAssign, DivAssign, ModAssign,
-    AddAsLocal, SubAsLocal, MulAsLocal, DivAsLocal, ModAsLocal,
-    // FIXME add global versions
-    //AddAsGlobal, SubAsGlobal, MulAsGlobal, DivAsGlobal, ModAsGlobal,
-    AddIntInline, SubIntInline, MulIntInline, DivIntInline, ModIntInline,
-    AddDubInline, SubDubInline, MulDubInline, DivDubInline, ModDubInline,
-    // FIXME maybe add assignment versions of the inline ones?
-    
-    And, Or, Xor, Shl, Shr, BoolAnd, BoolOr,
-    
-    Assign, AsLocal, // AsGlobal,
-    Return, Call,
-    
-    IfGoto, IfGotoLabel,
-    
-    IfGotoLabelEQ, IfGotoLabelNE, IfGotoLabelLE, IfGotoLabelGE, IfGotoLabelLT, IfGotoLabelGT,
-    
-    Goto, GotoLabel,
-    
-    ForLoop, ForLoopLabel, ForLoopLocal, // ForLoopGlobal,
-    
-    ScopeOpen,
-    ScopeClose,
-    
-    CmpEQ, CmpNE, CmpLE, CmpGE, CmpLT, CmpGT,
-    
-    ArrayBuild,
-    ArrayIndex,
-    Clone,
-    CloneDeep,
-    
-    ArrayLen, ArrayLenMinusOne, ArrayPushIn, ArrayPopOut, ArrayConcat,
-    
-    StringLiteral,
-    StringLitReference,
-    
-    BuiltinCall,
-    
-    Punt,
-    PuntN,
-    
-    Exit,
+    TOKEN_TABLE,
+    HandlerCount
 };
+#undef PFX
 
 struct Token { TKind kind; iword_t n, extra_1, extra_2; };
 struct Func { iword_t loc, len, name; };
@@ -807,417 +797,389 @@ Program load_program(string text)
     return programdata;
 }
 
-int interpret(const Program & programdata)
+struct ProgramState {
+    const Program & programdata;
+    const vector<Func> & funcs;
+    vector<DynamicType> vars_default;
+    vector<iword_t> callstack, fstack;
+    
+    ArrayData globals;
+    DynamicType * globals_raw;
+    
+    vector<ArrayData> varstacks;
+    ArrayData varstack;
+    DynamicType * varstack_raw;
+    
+    vector<vector<DynamicType>> evalstacks;
+    vector<DynamicType> evalstack;
+};
+
+typedef void(*[[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program);
+struct HandlerInfo { const HandlerT s[HandlerCount]; };
+extern const HandlerInfo handler;
+
+int interpreter_core(const Program & programdata, int i)
 {
     auto program = programdata.program.data();
-    auto & lines = programdata.lines;
-    auto & funcs = programdata.funcs;
     
     vector<DynamicType> vars_default;
     for (size_t i = 0; i < programdata.token_varnames.size(); i++)
         vars_default.push_back(0);
     
-    vector<iword_t> callstack, fstack;
+    auto s = ProgramState{
+        programdata, programdata.funcs, vars_default, {}, {},
+        make_array_data(vars_default), 0, {}, make_array_data(vars_default), 0, {}, {}
+    };
     
-    auto globals = make_array_data(vars_default);
-    auto globals_raw = globals->data();
+    s.globals_raw = s.globals->data();
+    s.varstack_raw = s.varstack->data();
+    s.fstack.push_back(0);
     
-    vector<ArrayData> varstacks;
-    auto varstack = make_array_data(vars_default);
-    auto varstack_raw = varstack->data();
-    
-    vector<vector<DynamicType>> evalstacks;
-    vector<DynamicType> evalstack;
-    
-    fstack.push_back(0);
-    
-    #define valreq(X) if (evalstack.size() < X) THROWSTR("internal interpreter error: not enough values on stack");
+    #define valreq(X) if (s.evalstack.size() < X) THROWSTR("internal interpreter error: not enough values on stack");
     //#define valreq(X)
-    #define valpush(X) evalstack.push_back(X)
-    #define valpop() vec_pop_back(evalstack)
-    #define valback() vec_at_back(evalstack)
+    #define valpush(X) s.evalstack.push_back(X)
+    #define valpop() vec_pop_back(s.evalstack)
+    #define valback() vec_at_back(s.evalstack)
     
-    int i = 0;
+    #ifdef INTERPRETER_USE_LOOP
+    
+    #define INTERPRETER_NEXT()
+    #define INTERPRETER_DEF()\
+        while (1) {\
+            auto n = program[i].n;\
+            switch (program[i].kind) {
+    #define INTERPRETER_CASE(NAME) case NAME: i += 1; {
+    #define INTERPRETER_ENDCASE() } break;
+    #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } }
+    #define INTERPRETER_DOEXIT() return 0;
+    
+    #else // of ifdef INTERPRETER_USE_LOOP
+    
+    #define INTERPRETER_NEXT() { [[clang::musttail]] return handler.s[program[i].kind](s, i, program); }
+    #define INTERPRETER_DEF() { handler.s[program[i].kind](s, i, program); return 0; } }
+    
+    #define INTERPRETER_CASE(NAME)\
+        [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
+        auto n = program[i++].n; (void)n; try {
+        //printf("at %d in %s\n", i - 1, #NAME);
+    #define INTERPRETER_ENDCASE() } catch (const exception& e) {\
+        auto & lines = s.programdata.lines;\
+        THROWSTR("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");\
+    } INTERPRETER_NEXT() }
+    #define INTERPRETER_ENDDEF() void _aowsgawgioaefwe(void){
+    #define INTERPRETER_DOEXIT() return;
+    
+    #endif // else of ifdef INTERPRETER_USE_LOOP
+    
+    #define INTERPRETER_MIDCASE(NAME) \
+        INTERPRETER_ENDCASE()\
+        INTERPRETER_CASE(NAME)
+    
+    INTERPRETER_DEF()
+    
+    INTERPRETER_CASE(FuncDec)
+        // leaving this as an addition instead of a pre-cached assignment prevents the compiler from combining FuncDec with GotoLabel
+        // and we WANT to do this prevention, for branch prediction reasons
+        i += s.funcs[n].len;
+    
+    INTERPRETER_MIDCASE(FuncLookup)
+        valpush(s.funcs[n]);
+    
+    INTERPRETER_MIDCASE(FuncEnd)
+        s.varstack = vec_pop_back(s.varstacks);
+        s.varstack_raw = s.varstack->data();
+        i = vec_pop_back(s.callstack);
+    INTERPRETER_MIDCASE(Return)
+        s.varstack = vec_pop_back(s.varstacks);
+        s.varstack_raw = s.varstack->data();
+        i = vec_pop_back(s.callstack);
+    
+    INTERPRETER_MIDCASE(LocalVarDec)
+        s.varstack_raw[n] = 0;
+    INTERPRETER_MIDCASE(LocalVarLookup)
+        valpush(make_ref(s.varstack, n));
+    INTERPRETER_MIDCASE(LocalVarDecLookup)
+        s.varstack_raw[n] = 0;
+        valpush(make_ref(s.varstack, n));
+    INTERPRETER_MIDCASE(GlobalVarDec)
+        s.globals_raw[n] = 0;
+    INTERPRETER_MIDCASE(GlobalVarLookup)
+        valpush(make_ref(s.globals, n));
+    INTERPRETER_MIDCASE(GlobalVarDecLookup)
+        s.globals_raw[n] = 0;
+        valpush(make_ref(s.globals, n));
+    
+    INTERPRETER_MIDCASE(LabelLookup)
+        valpush(Label{(int)n});
+    INTERPRETER_MIDCASE(LabelDec)
+        THROWSTR("internal interpreter error: tried to execute opcode that's supposed to be deleted");
+    
+    INTERPRETER_MIDCASE(Call)
+        Func f = valpop().as_func();
+        s.callstack.push_back(i);
+        s.fstack.push_back(f.name);
+        s.varstacks.push_back(s.varstack);
+        s.varstack = make_array_data(s.vars_default);
+        s.varstack_raw = s.varstack->data();
+        i = f.loc;
+    
+    INTERPRETER_MIDCASE(FuncCall)
+        Func f = s.funcs[n];
+        s.callstack.push_back(i);
+        s.fstack.push_back(f.name);
+        s.varstacks.push_back(s.varstack);
+        s.varstack = make_array_data(s.vars_default);
+        s.varstack_raw = s.varstack->data();
+        i = f.loc;
+    
+    INTERPRETER_MIDCASE(Assign)
+        valreq(2);
+        Ref ref = std::move(valpop().as_ref());
+        auto val = valpop();
+        *ref.ref() = val;
+    
+    INTERPRETER_MIDCASE(AsLocal)
+        auto val = valpop();
+        s.varstack_raw[n] = val;
+    
+    INTERPRETER_MIDCASE(ScopeOpen)
+        s.evalstacks.push_back(std::move(s.evalstack));
+        s.evalstack = {};
+    INTERPRETER_MIDCASE(ScopeClose)
+        s.evalstack = vec_pop_back(s.evalstacks);
+    
+    INTERPRETER_MIDCASE(IfGoto)
+        valreq(2);
+        Label dest = valpop().as_label();
+        auto val = valpop();
+        if (val) i = dest.loc;
+    INTERPRETER_MIDCASE(IfGotoLabel)
+        auto val = valpop();
+        if (val) i = n;
+    
+    INTERPRETER_MIDCASE(ForLoop)
+        valreq(3);
+        Label dest = valpop().as_label();
+        auto num = valpop();
+        auto ref = std::move(valpop().as_ref());
+        if (!num.is_int() || !ref.ref()->is_int())
+            THROWSTR("Tried to use for loop with non-integer");
+        *ref.ref() = *ref.ref() + 1;
+        if (*ref.ref() < num)
+            i = dest.loc;
+    INTERPRETER_MIDCASE(ForLoopLabel)
+        valreq(2);
+        auto num = valpop();
+        auto ref = std::move(valpop().as_ref());
+        if (!num.is_int() || !ref.ref()->is_int())
+            THROWSTR("Tried to use for loop with non-integer");
+        *ref.ref() = *ref.ref() + 1;
+        if (*ref.ref() < num)
+            i = n;
+    INTERPRETER_MIDCASE(ForLoopLocal)
+        // FIXME: add a global version
+        auto & _v = s.varstack_raw[program[i-1].extra_1];
+        if (!_v.is_int())
+            THROWSTR("Tried to use for loop with non-integer");
+        auto & v = _v.as_int();
+        int64_t num = (iwordsigned_t)program[i-1].extra_2;
+        if (++v < num)
+            i = n;
+    
+    // INTERPRETER_MIDCASE_GOTOLABELCMP
+    #define IMGLC(X, OP) \
+    INTERPRETER_MIDCASE(IfGotoLabel##X)\
+        valreq(2);\
+        auto val2 = valpop();\
+        auto val1 = valpop();\
+        if (val1 OP val2) i = n;
+    
+    // INTERPRETER_MIDCASE_UNARY_SIMPLE
+    #define IMCUS(NAME, OP) \
+    INTERPRETER_MIDCASE(NAME)\
+        valreq(2);\
+        auto b = valpop();\
+        auto x = valpop();\
+        valpush(x OP b);
+    
+    // INTERPRETER_MIDCASE_UNARY_INTINLINE
+    #define IMCUII(NAME, OP) \
+    INTERPRETER_MIDCASE(NAME)\
+        auto b = (int64_t)(iwordsigned_t)n;\
+        auto x = valpop();\
+        valpush(x OP b);
+    
+    // INTERPRETER_MIDCASE_UNARY_DUBINLINE
+    #define IMCUDI(NAME, OP) \
+    INTERPRETER_MIDCASE(NAME)\
+        uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;\
+        double d;\
+        memcpy(&d, &dec, sizeof(dec));\
+        auto x = valpop();\
+        valpush(x OP d);
+    
+    // INTERPRETER_MIDCASE_UNARY_ASSIGN
+    #define IMCUA(NAME, OP) \
+    INTERPRETER_MIDCASE(NAME)\
+        valreq(2);\
+        Ref ref = std::move(valpop().as_ref());\
+        auto a = valpop();\
+        *ref.ref() = *ref.ref() OP a;
+    
+    // INTERPRETER_MIDCASE_UNARY_ASSIGNLOC
+    #define IMCUAL(NAME, OP) \
+    INTERPRETER_MIDCASE(NAME)\
+        auto a = valpop();\
+        s.varstack_raw[n] = s.varstack_raw[n] OP a;
+    
+    IMGLC(EQ, ==) IMGLC(NE, !=) IMGLC(LE, <=) IMGLC(GE, >=) IMGLC(LT, <) IMGLC(GT, >)
+    IMCUS(Add, +) IMCUS(Sub, -) IMCUS(Mul, *) IMCUS(Div, /) IMCUS(Mod, %)
+    IMCUS(And, &) IMCUS(Or,  |) IMCUS(Xor, ^) IMCUS(BoolAnd, &&) IMCUS(BoolOr, ||)
+    IMCUS(Shl, <<) IMCUS(Shr, >>)
+    IMCUS(CmpEQ, ==) IMCUS(CmpNE, !=) IMCUS(CmpLE, <=) IMCUS(CmpGE, >=) IMCUS(CmpLT, <) IMCUS(CmpGT, >)
+    IMCUII(AddIntInline, +) IMCUII(SubIntInline, -) IMCUII(MulIntInline, *) IMCUII(DivIntInline, /) IMCUII(ModIntInline, %)
+    IMCUDI(AddDubInline, +) IMCUDI(SubDubInline, -) IMCUDI(MulDubInline, *) IMCUDI(DivDubInline, /) IMCUDI(ModDubInline, %)
+    IMCUA(AddAssign, +) IMCUA(SubAssign, -) IMCUA(MulAssign, *) IMCUA(DivAssign, /) IMCUA(ModAssign, %)
+    IMCUAL(AddAsLocal, +) IMCUAL(SubAsLocal, -) IMCUAL(MulAsLocal, *) IMCUAL(DivAsLocal, /) IMCUAL(ModAsLocal, %)
+    
+    INTERPRETER_MIDCASE(Goto)
+        i = valpop().as_label().loc;
+    INTERPRETER_MIDCASE(GotoLabel)
+        i = n;
+    
+    INTERPRETER_MIDCASE(IntegerInline)
+        valpush((int64_t)(iwordsigned_t)n);
+    INTERPRETER_MIDCASE(IntegerInlineBigDec)
+        valpush(((int64_t)(iwordsigned_t)n)*10000);
+    INTERPRETER_MIDCASE(IntegerInlineBigBin)
+        valpush(((int64_t)(iwordsigned_t)n)<<15);
+    INTERPRETER_MIDCASE(Integer)
+        valpush((int64_t)s.programdata.get_token_int(n));
+    
+    INTERPRETER_MIDCASE(DoubleInline)
+        uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;
+        double d;
+        memcpy(&d, &dec, sizeof(dec));
+        valpush(d);
+    INTERPRETER_MIDCASE(Double)
+        valpush(s.programdata.get_token_double(n));
+    
+    INTERPRETER_MIDCASE(LocalVar)
+        valpush(s.varstack_raw[n]);
+    
+    INTERPRETER_MIDCASE(GlobalVar)
+        valpush(s.globals_raw[n]);
+    
+    INTERPRETER_MIDCASE(ArrayBuild)
+        auto back = std::move(s.evalstack);
+        s.evalstack = vec_pop_back(s.evalstacks);
+        valpush(make_array(make_array_data(std::move(back))));
+    
+    INTERPRETER_MIDCASE(ArrayIndex)
+        valreq(2);
+        auto i = valpop().as_into_int();
+        auto val = valpop();
+        auto a = val.as_array_ptr_thru_ref();
+        // FIXME use valback?
+        if (val.is_array())
+            valpush((*a->items()).at(i));
+        else
+            valpush({make_ref(a->items(), (size_t)i)});
+    
+    INTERPRETER_MIDCASE(Clone)
+        auto & x = valback();
+        x = x.clone(false);
+    INTERPRETER_MIDCASE(CloneDeep)
+        auto & x = valback();
+        x = x.clone(true);
+    
+    INTERPRETER_MIDCASE(ArrayLen)
+        auto & a = valback();
+        a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size());
+    
+    INTERPRETER_MIDCASE(ArrayLenMinusOne)
+        auto & a = valback();
+        a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1);
+    
+    INTERPRETER_MIDCASE(ArrayPushIn)
+        valreq(3);
+        auto inval = valpop();
+        auto i = valpop().as_into_int();
+        auto v = valpop();
+        Array * a = v.as_array_ptr_thru_ref();
+        a->dirtify();
+        a->items()->insert(a->items()->begin() + i, inval);
+    
+    INTERPRETER_MIDCASE(ArrayPopOut)
+        valreq(2);
+        auto i = valpop().as_into_int();
+        auto v = valpop();
+        Array * a = v.as_array_ptr_thru_ref();
+        a->dirtify();
+        auto ret = (*a->items()).at(i);
+        a->items()->erase(a->items()->begin() + i);
+        valpush(ret); // FIXME use valmap
+    
+    INTERPRETER_MIDCASE(ArrayConcat)
+        valreq(2);
+        auto vr = valpop();
+        Array * ar = vr.as_array_ptr_thru_ref();
+        auto vl = valpop();
+        Array * al = vl.as_array_ptr_thru_ref();
+        auto newarray = make_array(make_array_data());
+        
+        newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
+        newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
+        valpush(newarray); // FIXME use valmap
+    
+    INTERPRETER_MIDCASE(StringLiteral)
+        valpush(make_array(make_array_data(s.programdata.get_token_stringval(n))));
+    
+    INTERPRETER_MIDCASE(StringLitReference)
+        valpush(make_array(s.programdata.get_token_stringref(n)));
+    
+    INTERPRETER_MIDCASE(BuiltinCall)
+        builtins[n](s.evalstack);
+    
+    INTERPRETER_MIDCASE(Punt)
+        if (s.evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
+        s.evalstacks.back().push_back(valpop());
+        
+    INTERPRETER_MIDCASE(PuntN)
+        if (s.evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
+        size_t count = valpop().as_into_int();
+        for (size_t i = 0; i < count; i++)
+            s.evalstacks.back().push_back(valpop());
+        std::reverse(s.evalstacks.back().end() - count, s.evalstacks.back().end());
+    
+    INTERPRETER_MIDCASE(Exit)
+        INTERPRETER_DOEXIT();
+        
+    INTERPRETER_ENDCASE()
+    INTERPRETER_ENDDEF()
+}
+
+#ifndef INTERPRETER_USE_LOOP
+#define PFX(X) Handler##X
+const HandlerInfo handler = { TOKEN_TABLE };
+#undef PFX
+#endif
+
+int interpret(const Program & programdata)
+{
+    #ifdef INTERPRETER_USE_LOOP
     try
     {
-        #ifdef INTERPRETER_USE_LOOP
-        
-        #define INTERPRETER_NEXT()
-        #define INTERPRETER_DEF()\
-            while (1) {\
-                auto n = program[i].n;\
-                switch (program[i].kind) {
-        #define INTERPRETER_CASE(NAME) case NAME: i += 1; {
-        #define INTERPRETER_ENDCASE() } break;
-        #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } }
-        
-        #else // of ifdef INTERPRETER_USE_LOOP
-        
-        static const void * const handlers[] = {
-            &&HandlerGlobalVar, &&HandlerGlobalVarDec, &&HandlerGlobalVarLookup, &&HandlerGlobalVarDecLookup,
-            &&HandlerLocalVar, &&HandlerLocalVarDec, &&HandlerLocalVarLookup, &&HandlerLocalVarDecLookup,
-            &&HandlerFuncDec, &&HandlerFuncLookup, &&HandlerFuncCall, &&HandlerFuncEnd,
-            &&HandlerLabelDec, &&HandlerLabelLookup,
-            
-            &&HandlerInteger,
-            &&HandlerIntegerInline,
-            &&HandlerIntegerInlineBigDec,
-            &&HandlerIntegerInlineBigBin,
-            &&HandlerDouble,
-            &&HandlerDoubleInline,
-            
-            &&HandlerAdd, &&HandlerSub, &&HandlerMul, &&HandlerDiv, &&HandlerMod,
-            &&HandlerAddAssign, &&HandlerSubAssign, &&HandlerMulAssign, &&HandlerDivAssign, &&HandlerModAssign,
-            &&HandlerAddAsLocal, &&HandlerSubAsLocal, &&HandlerMulAsLocal, &&HandlerDivAsLocal, &&HandlerModAsLocal,
-            &&HandlerAddIntInline, &&HandlerSubIntInline, &&HandlerMulIntInline, &&HandlerDivIntInline, &&HandlerModIntInline,
-            &&HandlerAddDubInline, &&HandlerSubDubInline, &&HandlerMulDubInline, &&HandlerDivDubInline, &&HandlerModDubInline,
-            
-            &&HandlerAnd, &&HandlerOr, &&HandlerXor,
-            &&HandlerShl, &&HandlerShr,
-            &&HandlerBoolAnd, &&HandlerBoolOr,
-            
-            &&HandlerAssign,
-            &&HandlerAsLocal,
-            &&HandlerReturn, &&HandlerCall,
-            
-            &&HandlerIfGoto, &&HandlerIfGotoLabel,
-            
-            &&HandlerIfGotoLabelEQ, &&HandlerIfGotoLabelNE, &&HandlerIfGotoLabelLE,
-            &&HandlerIfGotoLabelGE, &&HandlerIfGotoLabelLT, &&HandlerIfGotoLabelGT,
-            
-            &&HandlerGoto, &&HandlerGotoLabel,
-            
-            &&HandlerForLoop, &&HandlerForLoopLabel, &&HandlerForLoopLocal,
-            
-            &&HandlerScopeOpen, &&HandlerScopeClose,
-            
-            &&HandlerCmpEQ, &&HandlerCmpNE, &&HandlerCmpLE, &&HandlerCmpGE, &&HandlerCmpLT, &&HandlerCmpGT,
-            
-            &&HandlerArrayBuild,
-            &&HandlerArrayIndex,
-            &&HandlerClone,
-            &&HandlerCloneDeep,
-            
-            &&HandlerArrayLen, &&HandlerArrayLenMinusOne, &&HandlerArrayPushIn, &&HandlerArrayPopOut, &&HandlerArrayConcat,
-            
-            &&HandlerStringLiteral,
-            &&HandlerStringLitReference,
-            
-            &&HandlerBuiltinCall,
-            
-            &&HandlerPunt,
-            &&HandlerPuntN,
-            
-            &&HandlerExit,
-        };
-        
-        #define INTERPRETER_NEXT() goto *handlers[program[i].kind];
-        #define INTERPRETER_DEF() goto AFTERDEFS;
-        #define INTERPRETER_CASE(NAME)\
-            { Handler##NAME : { \
-            auto n = program[i++].n; (void)n;
-            //printf("at %d in %s\n", i - 1, #NAME);
-        #define INTERPRETER_ENDCASE() } INTERPRETER_NEXT() }
-        #define INTERPRETER_ENDDEF() if (false) { AFTERDEFS: { INTERPRETER_NEXT() } }
-        
-        #endif // else of ifdef INTERPRETER_USE_LOOP
-        
-        #define INTERPRETER_MIDCASE(NAME) \
-            INTERPRETER_ENDCASE()\
-            INTERPRETER_CASE(NAME)
-        #define INTERPRETER_DOEXIT() goto INTERPRETER_EXIT
-        
-        INTERPRETER_DEF()
-        
-        INTERPRETER_CASE(FuncDec)
-            // leaving this as an addition instead of a pre-cached assignment prevents the compiler from combining FuncDec with GotoLabel
-            // and we WANT to do this prevention, for branch prediction reasons
-            i += funcs[n].len;
-        
-        INTERPRETER_MIDCASE(FuncLookup)
-            valpush(funcs[n]);
-        
-        INTERPRETER_MIDCASE(FuncEnd)
-            varstack = vec_pop_back(varstacks);
-            varstack_raw = varstack->data();
-            i = callstack.back();
-            callstack.pop_back();
-        INTERPRETER_MIDCASE(Return)
-            varstack = vec_pop_back(varstacks);
-            varstack_raw = varstack->data();
-            i = callstack.back();
-            callstack.pop_back();
-        
-        INTERPRETER_MIDCASE(LocalVarDec)
-            varstack_raw[n] = 0;
-        INTERPRETER_MIDCASE(LocalVarLookup)
-            valpush(make_ref(varstack, n));
-        INTERPRETER_MIDCASE(LocalVarDecLookup)
-            varstack_raw[n] = 0;
-            valpush(make_ref(varstack, n));
-        INTERPRETER_MIDCASE(GlobalVarDec)
-            globals_raw[n] = 0;
-        INTERPRETER_MIDCASE(GlobalVarLookup)
-            valpush(make_ref(globals, n));
-        INTERPRETER_MIDCASE(GlobalVarDecLookup)
-            globals_raw[n] = 0;
-            valpush(make_ref(globals, n));
-        
-        INTERPRETER_MIDCASE(LabelLookup)
-            valpush(Label{(int)n});
-        INTERPRETER_MIDCASE(LabelDec)
-            THROWSTR("internal interpreter error: tried to execute opcode that's supposed to be deleted");
-        
-        INTERPRETER_MIDCASE(Call)
-            Func f = valpop().as_func();
-            callstack.push_back(i);
-            fstack.push_back(f.name);
-            varstacks.push_back(varstack);
-            varstack = make_array_data(vars_default);
-            varstack_raw = varstack->data();
-            i = f.loc;
-        
-        INTERPRETER_MIDCASE(FuncCall)
-            Func f = funcs[n];
-            callstack.push_back(i);
-            fstack.push_back(f.name);
-            varstacks.push_back(varstack);
-            varstack = make_array_data(vars_default);
-            varstack_raw = varstack->data();
-            i = f.loc;
-        
-        INTERPRETER_MIDCASE(Assign)
-            valreq(2);
-            Ref ref = std::move(valpop().as_ref());
-            auto val = valpop();
-            *ref.ref() = val;
-        
-        INTERPRETER_MIDCASE(AsLocal)
-            auto val = valpop();
-            varstack_raw[n] = val;
-        
-        INTERPRETER_MIDCASE(ScopeOpen)
-            evalstacks.push_back(std::move(evalstack));
-            evalstack = {};
-        INTERPRETER_MIDCASE(ScopeClose)
-            evalstack = vec_pop_back(evalstacks);
-        
-        INTERPRETER_MIDCASE(IfGoto)
-            valreq(2);
-            Label dest = valpop().as_label();
-            auto val = valpop();
-            if (val) i = dest.loc;
-        INTERPRETER_MIDCASE(IfGotoLabel)
-            auto val = valpop();
-            if (val) i = n;
-        
-        INTERPRETER_MIDCASE(ForLoop)
-            valreq(3);
-            Label dest = valpop().as_label();
-            auto num = valpop();
-            auto ref = std::move(valpop().as_ref());
-            if (!num.is_int() || !ref.ref()->is_int())
-                THROWSTR("Tried to use for loop with non-integer");
-            *ref.ref() = *ref.ref() + 1;
-            if (*ref.ref() < num)
-                i = dest.loc;
-        INTERPRETER_MIDCASE(ForLoopLabel)
-            valreq(2);
-            auto num = valpop();
-            auto ref = std::move(valpop().as_ref());
-            if (!num.is_int() || !ref.ref()->is_int())
-                THROWSTR("Tried to use for loop with non-integer");
-            *ref.ref() = *ref.ref() + 1;
-            if (*ref.ref() < num)
-                i = n;
-        INTERPRETER_MIDCASE(ForLoopLocal)
-            // FIXME: add a global version
-            auto & _v = varstack_raw[program[i-1].extra_1];
-            if (!_v.is_int())
-                THROWSTR("Tried to use for loop with non-integer");
-            auto & v = _v.as_int();
-            int64_t num = (iwordsigned_t)program[i-1].extra_2;
-            if (++v < num)
-                i = n;
-        
-        // INTERPRETER_MIDCASE_GOTOLABELCMP
-        #define IMGLC(X, OP) \
-        INTERPRETER_MIDCASE(IfGotoLabel##X)\
-            valreq(2);\
-            auto val2 = valpop();\
-            auto val1 = valpop();\
-            if (val1 OP val2) i = n;
-        
-        // INTERPRETER_MIDCASE_UNARY_SIMPLE
-        #define IMCUS(NAME, OP) \
-        INTERPRETER_MIDCASE(NAME)\
-            valreq(2);\
-            auto b = valpop();\
-            auto x = valpop();\
-            valpush(x OP b);
-        
-        // INTERPRETER_MIDCASE_UNARY_INTINLINE
-        #define IMCUII(NAME, OP) \
-        INTERPRETER_MIDCASE(NAME)\
-            auto b = (int64_t)(iwordsigned_t)n;\
-            auto x = valpop();\
-            valpush(x OP b);
-        
-        // INTERPRETER_MIDCASE_UNARY_DUBINLINE
-        #define IMCUDI(NAME, OP) \
-        INTERPRETER_MIDCASE(NAME)\
-            uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;\
-            double d;\
-            memcpy(&d, &dec, sizeof(dec));\
-            auto x = valpop();\
-            valpush(x OP d);
-        
-        // INTERPRETER_MIDCASE_UNARY_ASSIGN
-        #define IMCUA(NAME, OP) \
-        INTERPRETER_MIDCASE(NAME)\
-            valreq(2);\
-            Ref ref = std::move(valpop().as_ref());\
-            auto a = valpop();\
-            *ref.ref() = *ref.ref() OP a;
-        
-        // INTERPRETER_MIDCASE_UNARY_ASSIGNLOC
-        #define IMCUAL(NAME, OP) \
-        INTERPRETER_MIDCASE(NAME)\
-            auto a = valpop();\
-            varstack_raw[n] = varstack_raw[n] OP a;
-        
-        IMGLC(EQ, ==) IMGLC(NE, !=) IMGLC(LE, <=) IMGLC(GE, >=) IMGLC(LT, <) IMGLC(GT, >)
-        IMCUS(Add, +) IMCUS(Sub, -) IMCUS(Mul, *) IMCUS(Div, /) IMCUS(Mod, %)
-        IMCUS(And, &) IMCUS(Or,  |) IMCUS(Xor, ^) IMCUS(BoolAnd, &&) IMCUS(BoolOr, ||)
-        IMCUS(Shl, <<) IMCUS(Shr, >>)
-        IMCUS(CmpEQ, ==) IMCUS(CmpNE, !=) IMCUS(CmpLE, <=) IMCUS(CmpGE, >=) IMCUS(CmpLT, <) IMCUS(CmpGT, >)
-        IMCUII(AddIntInline, +) IMCUII(SubIntInline, -) IMCUII(MulIntInline, *) IMCUII(DivIntInline, /) IMCUII(ModIntInline, %)
-        IMCUDI(AddDubInline, +) IMCUDI(SubDubInline, -) IMCUDI(MulDubInline, *) IMCUDI(DivDubInline, /) IMCUDI(ModDubInline, %)
-        IMCUA(AddAssign, +) IMCUA(SubAssign, -) IMCUA(MulAssign, *) IMCUA(DivAssign, /) IMCUA(ModAssign, %)
-        IMCUAL(AddAsLocal, +) IMCUAL(SubAsLocal, -) IMCUAL(MulAsLocal, *) IMCUAL(DivAsLocal, /) IMCUAL(ModAsLocal, %)
-        
-        INTERPRETER_MIDCASE(Goto)
-            i = valpop().as_label().loc;
-        INTERPRETER_MIDCASE(GotoLabel)
-            i = n;
-        
-        INTERPRETER_MIDCASE(IntegerInline)
-            valpush((int64_t)(iwordsigned_t)n);
-        INTERPRETER_MIDCASE(IntegerInlineBigDec)
-            valpush(((int64_t)(iwordsigned_t)n)*10000);
-        INTERPRETER_MIDCASE(IntegerInlineBigBin)
-            valpush(((int64_t)(iwordsigned_t)n)<<15);
-        INTERPRETER_MIDCASE(Integer)
-            valpush((int64_t)programdata.get_token_int(n));
-        
-        INTERPRETER_MIDCASE(DoubleInline)
-            uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;
-            double d;
-            memcpy(&d, &dec, sizeof(dec));
-            valpush(d);
-        INTERPRETER_MIDCASE(Double)
-            valpush(programdata.get_token_double(n));
-        
-        INTERPRETER_MIDCASE(LocalVar)
-            valpush(varstack_raw[n]);
-        
-        INTERPRETER_MIDCASE(GlobalVar)
-            valpush(globals_raw[n]);
-        
-        INTERPRETER_MIDCASE(ArrayBuild)
-            auto back = std::move(evalstack);
-            evalstack = vec_pop_back(evalstacks);
-            valpush(make_array(make_array_data(std::move(back))));
-        
-        INTERPRETER_MIDCASE(ArrayIndex)
-            valreq(2);
-            auto i = valpop().as_into_int();
-            auto val = valpop();
-            auto a = val.as_array_ptr_thru_ref();
-            // FIXME use valback?
-            if (val.is_array())
-                valpush((*a->items()).at(i));
-            else
-                valpush({make_ref(a->items(), (size_t)i)});
-        
-        INTERPRETER_MIDCASE(Clone)
-            auto & x = valback();
-            x = x.clone(false);
-        INTERPRETER_MIDCASE(CloneDeep)
-            auto & x = valback();
-            x = x.clone(true);
-        
-        INTERPRETER_MIDCASE(ArrayLen)
-            auto & a = valback();
-            a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size());
-        
-        INTERPRETER_MIDCASE(ArrayLenMinusOne)
-            auto & a = valback();
-            a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1);
-        
-        INTERPRETER_MIDCASE(ArrayPushIn)
-            valreq(3);
-            auto inval = valpop();
-            auto i = valpop().as_into_int();
-            auto v = valpop();
-            Array * a = v.as_array_ptr_thru_ref();
-            a->dirtify();
-            a->items()->insert(a->items()->begin() + i, inval);
-        
-        INTERPRETER_MIDCASE(ArrayPopOut)
-            valreq(2);
-            auto i = valpop().as_into_int();
-            auto v = valpop();
-            Array * a = v.as_array_ptr_thru_ref();
-            a->dirtify();
-            auto ret = (*a->items()).at(i);
-            a->items()->erase(a->items()->begin() + i);
-            valpush(ret); // FIXME use valmap
-        
-        INTERPRETER_MIDCASE(ArrayConcat)
-            valreq(2);
-            auto vr = valpop();
-            Array * ar = vr.as_array_ptr_thru_ref();
-            auto vl = valpop();
-            Array * al = vl.as_array_ptr_thru_ref();
-            auto newarray = make_array(make_array_data());
-            
-            newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
-            newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
-            valpush(newarray); // FIXME use valmap
-        
-        INTERPRETER_MIDCASE(StringLiteral)
-            valpush(make_array(make_array_data(programdata.get_token_stringval(n))));
-        
-        INTERPRETER_MIDCASE(StringLitReference)
-            valpush(make_array(programdata.get_token_stringref(n)));
-        
-        INTERPRETER_MIDCASE(BuiltinCall)
-            builtins[n](evalstack);
-        
-        INTERPRETER_MIDCASE(Punt)
-            if (evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
-            evalstacks.back().push_back(valpop());
-            
-        INTERPRETER_MIDCASE(PuntN)
-            if (evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
-            size_t count = valpop().as_into_int();
-            for (size_t i = 0; i < count; i++)
-                evalstacks.back().push_back(valpop());
-            std::reverse(evalstacks.back().end() - count, evalstacks.back().end());
-        
-        INTERPRETER_MIDCASE(Exit)
-            INTERPRETER_DOEXIT();
-            
-        INTERPRETER_ENDCASE()
-        INTERPRETER_ENDDEF()
-
-        INTERPRETER_EXIT: { }
+        interpreter_core(programdata, 0);
     }
     catch (const exception& e)
     {
+        auto & lines = programdata.lines;
         THROWSTR("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");
     }
+    #else
+    interpreter_core(programdata, 0);
+    #endif
     return 0;
 }
 

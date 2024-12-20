@@ -19,8 +19,16 @@
 #define NOINLINE __attribute__((noinline))
 #endif
 
-//#define THROWSTR(X) throw runtime_error(X)
-#define THROWSTR(X) throw (X)
+//#define THROWSTR(X) throw std::runtime_error(X)
+//#define THROWSTR(X) throw (X)
+template <typename T> [[noreturn]] void THROWSTR(T X) { throw std::runtime_error(X); }
+//template <typename T> [[noreturn]] void THROWSTR(T X) { throw X; }
+
+template <typename T>
+[[noreturn]] void rethrow(int line, int i, T & e)
+{
+    THROWSTR("Error on line " + std::to_string(line) + ": " + e.what() + " (token " + std::to_string(i) + ")");
+}
 
 template <typename T> T vec_pop_back(std::vector<T> & v)
 {
@@ -130,23 +138,40 @@ NOINLINE Ref::~Ref() { } // ???? why does  this make the interpreter faster
 #endif // MEMORY_SAFE_REFERENCES
 
 template <typename T>
-shared_ptr<vector<DynamicType>> make_array_data(T x) { return make_shared<vector<DynamicType>>(x); }
-shared_ptr<vector<DynamicType>> make_array_data() { return make_shared<vector<DynamicType>>(); }
+ArrayData make_array_data(T x) { return make_shared<vector<DynamicType>>(x); }
+ArrayData make_array_data() { return make_shared<vector<DynamicType>>(); }
 
 struct Label { int loc; };
 struct Array {
-    ArrayData ** _items;
-    ArrayData & items() { return **_items; }
+    struct ArrayInfo {
+        ArrayData items;
+        uint64_t n;
+    };
+    
+    static ArrayInfo * make_arrayinfo(ArrayData && backing)
+    {
+        return new Array::ArrayInfo{backing, 2};
+    }
+    
+    ArrayInfo * info;
+    ArrayData & items();
     ~Array();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
     // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
     // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
     void dirtify();
+    
+    Array(ArrayInfo * r) noexcept : info(r) { }
+    NOINLINE Array(const Array & r) noexcept { info = r.info; info->n += 2; }
+    Array(Array && r) noexcept { info = r.info; r.info = nullptr; }
+    NOINLINE Array & operator=(const Array & r) noexcept { info = r.info; info->n += 2; return *this; }
+    Array & operator=(Array && r) noexcept { info = r.info; r.info = nullptr; return *this; }
 };
-NOINLINE Array::~Array() { }
-
-inline Array make_array(ArrayData && backing) { return Array { new ArrayData * (new ArrayData(backing)) };}
+NOINLINE ArrayData & Array::items() { return info->items; }
+NOINLINE Array make_array(ArrayData && backing) { return Array { Array::make_arrayinfo(std::move(backing)) };}
+//NOINLINE Array::~Array() { if (!info) return; info->n--; if (!info->n) delete info; }
+NOINLINE Array::~Array() { info->n -= 2; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -251,7 +276,7 @@ struct DynamicType {
         while (is_ref()) *this = *as_ref().ref();
         if (!is_array()) return *this;
         auto t = make_array_data(*as_array().items());
-        as_array()._items = new ArrayData * (new ArrayData(t));
+        as_array().info = Array::make_arrayinfo(std::move(t));
         if (!deep) return *this;
         for (auto & item : *as_array().items()) item = item.clone(deep);
         return *this;
@@ -260,7 +285,8 @@ struct DynamicType {
 
 inline Ref make_ref(ArrayData & backing, size_t i) { MAKEREF }
 
-void Array::dirtify() { if (!(*_items)->unique()) *_items = new ArrayData(make_array_data(***_items)); }
+//NOINLINE void Array::dirtify() { if (info && info->n != 1) info->items = make_array_data(*info->items); }
+void Array::dirtify() { if (info && info->n > 2) info->items = make_array_data(*info->items); }
 
 struct Program {
     vector<Token> program;
@@ -837,7 +863,6 @@ int interpreter_core(const Program & programdata, int i)
     s.fstack.push_back(0);
     
     #define valreq(X) if (s.evalstack.size() < X) THROWSTR("internal interpreter error: not enough values on stack");
-    //#define valreq(X)
     #define valpush(X) s.evalstack.push_back(X)
     #define valpop() vec_pop_back(s.evalstack)
     #define valback() vec_at_back(s.evalstack)
@@ -864,17 +889,14 @@ int interpreter_core(const Program & programdata, int i)
         auto n = program[i++].n; (void)n; try {
         //printf("at %d in %s\n", i - 1, #NAME);
     #define INTERPRETER_ENDCASE() } catch (const exception& e) {\
-        auto & lines = s.programdata.lines;\
-        THROWSTR("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");\
+        rethrow(s.programdata.lines[i], i, e);\
     } INTERPRETER_NEXT() }
     #define INTERPRETER_ENDDEF() void _aowsgawgioaefwe(void){
     #define INTERPRETER_DOEXIT() return;
     
     #endif // else of ifdef INTERPRETER_USE_LOOP
     
-    #define INTERPRETER_MIDCASE(NAME) \
-        INTERPRETER_ENDCASE()\
-        INTERPRETER_CASE(NAME)
+    #define INTERPRETER_MIDCASE(NAME) INTERPRETER_ENDCASE() INTERPRETER_CASE(NAME)
     
     INTERPRETER_DEF()
     
@@ -933,8 +955,7 @@ int interpreter_core(const Program & programdata, int i)
         s.varstack_raw = s.varstack->data();
         i = f.loc;
     
-    INTERPRETER_MIDCASE(Assign)
-        valreq(2);
+    INTERPRETER_MIDCASE(Assign) valreq(2);
         Ref ref = std::move(valpop().as_ref());
         auto val = valpop();
         *ref.ref() = val;
@@ -949,8 +970,7 @@ int interpreter_core(const Program & programdata, int i)
     INTERPRETER_MIDCASE(ScopeClose)
         s.evalstack = vec_pop_back(s.evalstacks);
     
-    INTERPRETER_MIDCASE(IfGoto)
-        valreq(2);
+    INTERPRETER_MIDCASE(IfGoto) valreq(2);
         Label dest = valpop().as_label();
         auto val = valpop();
         if (val) i = dest.loc;
@@ -958,8 +978,7 @@ int interpreter_core(const Program & programdata, int i)
         auto val = valpop();
         if (val) i = n;
     
-    INTERPRETER_MIDCASE(ForLoop)
-        valreq(3);
+    INTERPRETER_MIDCASE(ForLoop) valreq(3);
         Label dest = valpop().as_label();
         auto num = valpop();
         auto ref = std::move(valpop().as_ref());
@@ -968,8 +987,7 @@ int interpreter_core(const Program & programdata, int i)
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num)
             i = dest.loc;
-    INTERPRETER_MIDCASE(ForLoopLabel)
-        valreq(2);
+    INTERPRETER_MIDCASE(ForLoopLabel) valreq(2);
         auto num = valpop();
         auto ref = std::move(valpop().as_ref());
         if (!num.is_int() || !ref.ref()->is_int())
@@ -989,16 +1007,14 @@ int interpreter_core(const Program & programdata, int i)
     
     // INTERPRETER_MIDCASE_GOTOLABELCMP
     #define IMGLC(X, OP) \
-    INTERPRETER_MIDCASE(IfGotoLabel##X)\
-        valreq(2);\
+    INTERPRETER_MIDCASE(IfGotoLabel##X) valreq(2);\
         auto val2 = valpop();\
         auto val1 = valpop();\
         if (val1 OP val2) i = n;
     
     // INTERPRETER_MIDCASE_UNARY_SIMPLE
     #define IMCUS(NAME, OP) \
-    INTERPRETER_MIDCASE(NAME)\
-        valreq(2);\
+    INTERPRETER_MIDCASE(NAME) valreq(2);\
         auto b = valpop();\
         auto x = valpop();\
         valpush(x OP b);
@@ -1021,8 +1037,7 @@ int interpreter_core(const Program & programdata, int i)
     
     // INTERPRETER_MIDCASE_UNARY_ASSIGN
     #define IMCUA(NAME, OP) \
-    INTERPRETER_MIDCASE(NAME)\
-        valreq(2);\
+    INTERPRETER_MIDCASE(NAME) valreq(2);\
         Ref ref = std::move(valpop().as_ref());\
         auto a = valpop();\
         *ref.ref() = *ref.ref() OP a;
@@ -1076,8 +1091,7 @@ int interpreter_core(const Program & programdata, int i)
         s.evalstack = vec_pop_back(s.evalstacks);
         valpush(make_array(make_array_data(std::move(back))));
     
-    INTERPRETER_MIDCASE(ArrayIndex)
-        valreq(2);
+    INTERPRETER_MIDCASE(ArrayIndex) valreq(2);
         auto i = valpop().as_into_int();
         auto val = valpop();
         auto a = val.as_array_ptr_thru_ref();
@@ -1102,8 +1116,7 @@ int interpreter_core(const Program & programdata, int i)
         auto & a = valback();
         a = ((int64_t)a.as_array_ptr_thru_ref()->items()->size() - 1);
     
-    INTERPRETER_MIDCASE(ArrayPushIn)
-        valreq(3);
+    INTERPRETER_MIDCASE(ArrayPushIn) valreq(3);
         auto inval = valpop();
         auto i = valpop().as_into_int();
         auto v = valpop();
@@ -1111,8 +1124,7 @@ int interpreter_core(const Program & programdata, int i)
         a->dirtify();
         a->items()->insert(a->items()->begin() + i, inval);
     
-    INTERPRETER_MIDCASE(ArrayPopOut)
-        valreq(2);
+    INTERPRETER_MIDCASE(ArrayPopOut) valreq(2);
         auto i = valpop().as_into_int();
         auto v = valpop();
         Array * a = v.as_array_ptr_thru_ref();
@@ -1121,8 +1133,7 @@ int interpreter_core(const Program & programdata, int i)
         a->items()->erase(a->items()->begin() + i);
         valpush(ret); // FIXME use valmap
     
-    INTERPRETER_MIDCASE(ArrayConcat)
-        valreq(2);
+    INTERPRETER_MIDCASE(ArrayConcat) valreq(2);
         auto vr = valpop();
         Array * ar = vr.as_array_ptr_thru_ref();
         auto vl = valpop();
@@ -1169,10 +1180,7 @@ const HandlerInfo handler = { TOKEN_TABLE };
 int interpret(const Program & programdata)
 {
     #ifdef INTERPRETER_USE_LOOP
-    try
-    {
-        interpreter_core(programdata, 0);
-    }
+    try { interpreter_core(programdata, 0); }
     catch (const exception& e)
     {
         auto & lines = programdata.lines;

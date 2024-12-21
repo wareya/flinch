@@ -49,44 +49,44 @@ const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 
 #define TOKEN_TABLE \
 PFX(GlobalVar),PFX(GlobalVarDec),PFX(GlobalVarLookup),PFX(GlobalVarDecLookup),\
-PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
-PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),\
-PFX(LabelDec),PFX(LabelLookup),\
+    PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
+    PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),\
+    PFX(LabelDec),PFX(LabelLookup),\
 PFX(Integer),\
-PFX(IntegerInline),\
-PFX(IntegerInlineBigDec),\
-PFX(IntegerInlineBigBin),\
+    PFX(IntegerInline),\
+    PFX(IntegerInlineBigDec),\
+    PFX(IntegerInlineBigBin),\
 PFX(Double),\
-PFX(DoubleInline),\
+    PFX(DoubleInline),\
 PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
-PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
-PFX(AddAsLocal),PFX(SubAsLocal),PFX(MulAsLocal),PFX(DivAsLocal),PFX(ModAsLocal),\
-PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
-PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
+    PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
+    PFX(AddAsLocal),PFX(SubAsLocal),PFX(MulAsLocal),PFX(DivAsLocal),PFX(ModAsLocal),\
+    PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
+    PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
 PFX(And),PFX(Or),PFX(Xor),\
-PFX(Shl),PFX(Shr),\
-PFX(BoolAnd),PFX(BoolOr),\
+    PFX(Shl),PFX(Shr),\
+    PFX(BoolAnd),PFX(BoolOr),\
 PFX(Assign),\
-PFX(AsLocal),\
+    PFX(AsLocal),\
 PFX(Return),PFX(Call),\
-PFX(IfGoto),PFX(IfGotoLabel),\
-PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),\
-PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
-PFX(Goto),PFX(GotoLabel),\
-PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
+    PFX(IfGoto),PFX(IfGotoLabel),\
+    PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),\
+    PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
+    PFX(Goto),PFX(GotoLabel),\
+    PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
 PFX(ScopeOpen),PFX(ScopeClose),\
-PFX(CmpEQ),PFX(CmpNE),PFX(CmpLE),PFX(CmpGE),PFX(CmpLT),PFX(CmpGT),\
+    PFX(CmpEQ),PFX(CmpNE),PFX(CmpLE),PFX(CmpGE),PFX(CmpLT),PFX(CmpGT),\
 PFX(ArrayBuild),\
-PFX(ArrayIndex),\
-PFX(Clone),\
-PFX(CloneDeep),\
-PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
+    PFX(ArrayIndex),\
+    PFX(Clone),\
+    PFX(CloneDeep),\
+    PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
 PFX(StringLiteral),\
-PFX(StringLitReference),\
+    PFX(StringLitReference),\
 PFX(BuiltinCall),\
-PFX(Punt),\
-PFX(PuntN),\
-PFX(Exit)
+    PFX(Punt),\
+    PFX(PuntN),\
+    PFX(Exit)
 
 // token kind
 #define PFX(X) X
@@ -841,12 +841,15 @@ struct ProgramState {
 };
 
 #if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
-typedef void(*[[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program);
+//typedef void(*[[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program);
+#define HANDLERATT(NAME) extern "C" [[clang::preserve_none]] __attribute__((section(".Handler"#NAME), aligned(8192)))
+typedef void(* [[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program);
 struct HandlerInfo { const HandlerT s[HandlerCount]; };
 extern const HandlerInfo handler;
+HANDLERATT(GlobalVar) void HandlerGlobalVar(ProgramState & s, int i, const Token * program);
 #endif
 
-int interpreter_core(const Program & programdata, int i)
+void interpreter_core(const Program & programdata, int i)
 {
     auto program = programdata.program.data();
     
@@ -878,7 +881,7 @@ int interpreter_core(const Program & programdata, int i)
     #define INTERPRETER_ENDCASE() } break;
     #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } } }\
         catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }
-    #define INTERPRETER_DOEXIT() return 0;
+    #define INTERPRETER_DOEXIT() return;
     
     #elif defined INTERPRETER_USE_CGOTO
     
@@ -894,17 +897,23 @@ int interpreter_core(const Program & programdata, int i)
         auto n = program[i++].n; (void)n; {
         //printf("at %d in %s\n", i - 1, #NAME);
     #define INTERPRETER_ENDCASE() } INTERPRETER_NEXT() }
-    #define INTERPRETER_ENDDEF() INTERPRETER_EXIT: { } return 0; }\
+    #define INTERPRETER_ENDDEF() INTERPRETER_EXIT: { } return; }\
         catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }
     #define INTERPRETER_DOEXIT() goto INTERPRETER_EXIT;
     
     #else // of ifdef INTERPRETER_USE_LOOP
     
-    #define INTERPRETER_NEXT() { [[clang::musttail]] return handler.s[program[i].kind](s, i, program); }
-    #define INTERPRETER_DEF() { handler.s[program[i].kind](s, i, program); return 0; } }
+    //#define INTERPRETER_NEXT() { [[clang::musttail]] return handler.s[program[i].kind](s, i, program); }
+    //#define INTERPRETER_NEXT() { [[clang::musttail]] return ((HandlerT*)(((char*)(handler.s[0]))+(i<<13)))[program[i].kind](s, i, program); }
+    #define INTERPRETER_NEXT() {\
+        /*HandlerT a = ((HandlerT)(((char*)(handler.s[0]))+(program[i].kind<<13)));*/\
+        /*HandlerT a = handler.s[program[i].kind];*/\
+        auto a = (HandlerT)(((char*)(&HandlerGlobalVar))+(program[i].kind<<13));\
+        [[clang::musttail]] return a(s, i, program); }
+    #define INTERPRETER_DEF() { handler.s[program[i].kind](s, i, program); return; } }
     
     #define INTERPRETER_CASE(NAME)\
-        [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
+        HANDLERATT(NAME) void Handler##NAME(ProgramState & s, int i, const Token * program) { \
         auto n = program[i++].n; (void)n; try {
         //printf("at %d in %s\n", i - 1, #NAME);
     #define INTERPRETER_ENDCASE() } catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }\
@@ -1192,10 +1201,9 @@ const HandlerInfo handler = { TOKEN_TABLE };
 #undef PFX
 #endif
 
-int interpret(const Program & programdata)
+void interpret(const Program & programdata)
 {
     interpreter_core(programdata, 0);
-    return 0;
 }
 
 #endif // FLINCH_INCLUDE

@@ -693,11 +693,6 @@ Program load_program(string text)
     }
     program.push_back(make_token(Exit, 0));
     
-    program.push_back(make_token(Exit, 0));
-    program.push_back(make_token(Exit, 0));
-    program.push_back(make_token(Exit, 0));
-    program.push_back(make_token(Exit, 0));
-    
     //for (auto & s : program_texts)
     //    printf("%s\n", s.data());
     
@@ -846,7 +841,7 @@ struct ProgramState {
 };
 
 #if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
-typedef void(*[[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program, void * nextinst);
+typedef void(*[[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program);
 struct HandlerInfo { const HandlerT s[HandlerCount]; };
 extern const HandlerInfo handler;
 #endif
@@ -905,11 +900,11 @@ int interpreter_core(const Program & programdata, int i)
     
     #else // of ifdef INTERPRETER_USE_LOOP
     
-    #define INTERPRETER_NEXT() { auto nextnext = (void *)handler.s[program[i+1].kind]; [[clang::musttail]] return ((HandlerT)nextinst)(s, i, program, nextnext); }
-    #define INTERPRETER_DEF() { handler.s[program[i].kind](s, i, program, (void *)program[i+1].kind); return 0; } }
+    #define INTERPRETER_NEXT() { [[clang::musttail]] return handler.s[program[i].kind](s, i, program); }
+    #define INTERPRETER_DEF() { handler.s[program[i].kind](s, i, program); return 0; } }
     
     #define INTERPRETER_CASE(NAME)\
-        [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program, void * nextinst) { \
+        [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
         auto n = program[i++].n; (void)n; try {
         //printf("at %d in %s\n", i - 1, #NAME);
     #define INTERPRETER_ENDCASE() } catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }\
@@ -927,7 +922,6 @@ int interpreter_core(const Program & programdata, int i)
         // leaving this as an addition instead of a pre-cached assignment prevents the compiler from combining FuncDec with GotoLabel
         // and we WANT to do this prevention, for branch prediction reasons
         i += s.funcs[n].len;
-        nextinst = (void *)handler.s[program[i].kind];
     
     INTERPRETER_MIDCASE(FuncLookup)
         valpush(s.funcs[n]);
@@ -936,12 +930,10 @@ int interpreter_core(const Program & programdata, int i)
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
-        nextinst = (void *)handler.s[program[i].kind];
     INTERPRETER_MIDCASE(Return)
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
-        nextinst = (void *)handler.s[program[i].kind];
     
     INTERPRETER_MIDCASE(LocalVarDec)
         s.varstack_raw[n] = 0;
@@ -971,7 +963,6 @@ int interpreter_core(const Program & programdata, int i)
         s.varstack = make_array_data(s.vars_default);
         s.varstack_raw = s.varstack->data();
         i = f.loc;
-        nextinst = (void *)handler.s[program[i].kind];
     
     INTERPRETER_MIDCASE(FuncCall)
         Func f = s.funcs[n];
@@ -981,7 +972,6 @@ int interpreter_core(const Program & programdata, int i)
         s.varstack = make_array_data(s.vars_default);
         s.varstack_raw = s.varstack->data();
         i = f.loc;
-        nextinst = (void *)handler.s[program[i].kind];
     
     INTERPRETER_MIDCASE(Assign) valreq(2);
         Ref ref = std::move(valpop().as_ref());
@@ -1002,11 +992,9 @@ int interpreter_core(const Program & programdata, int i)
         Label dest = valpop().as_label();
         auto val = valpop();
         if (val) i = dest.loc;
-        nextinst = (void *)handler.s[program[i].kind];
     INTERPRETER_MIDCASE(IfGotoLabel)
         auto val = valpop();
         if (val) i = n;
-        nextinst = (void *)handler.s[program[i].kind];
     
     INTERPRETER_MIDCASE(ForLoop) valreq(3);
         Label dest = valpop().as_label();
@@ -1016,7 +1004,6 @@ int interpreter_core(const Program & programdata, int i)
             THROWSTR("Tried to use for loop with non-integer");
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num) i = dest.loc;
-        nextinst = (void *)handler.s[program[i].kind];
     INTERPRETER_MIDCASE(ForLoopLabel) valreq(2);
         auto num = valpop();
         auto ref = std::move(valpop().as_ref());
@@ -1024,7 +1011,6 @@ int interpreter_core(const Program & programdata, int i)
             THROWSTR("Tried to use for loop with non-integer");
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num) i = n;
-        nextinst = (void *)handler.s[program[i].kind];
     INTERPRETER_MIDCASE(ForLoopLocal)
         // FIXME: add a global version
         auto & _v = s.varstack_raw[program[i-1].extra_1];
@@ -1033,7 +1019,6 @@ int interpreter_core(const Program & programdata, int i)
         auto & v = _v.as_int();
         int64_t num = (iwordsigned_t)program[i-1].extra_2;
         if (++v < num) i = n;
-        nextinst = (void *)handler.s[program[i].kind];
     
     // INTERPRETER_MIDCASE_GOTOLABELCMP
     #define IMGLC(X, OP) \
@@ -1041,7 +1026,6 @@ int interpreter_core(const Program & programdata, int i)
         auto val2 = valpop();\
         auto val1 = valpop();\
         if (val1 OP val2) i = n;
-        nextinst = (void *)handler.s[program[i].kind];
     
     // INTERPRETER_MIDCASE_UNARY_SIMPLE
     #define IMCUS(NAME, OP) \
@@ -1091,10 +1075,8 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(Goto)
         i = valpop().as_label().loc;
-        nextinst = (void *)handler.s[program[i].kind];
     INTERPRETER_MIDCASE(GotoLabel)
         i = n;
-        nextinst = (void *)handler.s[program[i].kind];
     
     INTERPRETER_MIDCASE(IntegerInline)
         valpush((int64_t)(iwordsigned_t)n);

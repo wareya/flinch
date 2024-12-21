@@ -840,9 +840,11 @@ struct ProgramState {
     vector<DynamicType> evalstack;
 };
 
+#if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
 typedef void(*[[clang::preserve_none]] HandlerT)(ProgramState & s, int i, const Token * program);
 struct HandlerInfo { const HandlerT s[HandlerCount]; };
 extern const HandlerInfo handler;
+#endif
 
 int interpreter_core(const Program & programdata, int i)
 {
@@ -869,14 +871,32 @@ int interpreter_core(const Program & programdata, int i)
     #ifdef INTERPRETER_USE_LOOP
     
     #define INTERPRETER_NEXT()
-    #define INTERPRETER_DEF()\
-        while (1) {\
+    #define INTERPRETER_DEF() try { while (1) {\
             auto n = program[i].n;\
             switch (program[i].kind) {
     #define INTERPRETER_CASE(NAME) case NAME: i += 1; {
     #define INTERPRETER_ENDCASE() } break;
-    #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } }
+    #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } } }\
+        catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }
     #define INTERPRETER_DOEXIT() return 0;
+    
+    #elif defined INTERPRETER_USE_CGOTO
+    
+    #define PFX(X) &&Handler##X
+    const void * const handlers[] = { TOKEN_TABLE };
+    #undef PFX
+    
+    #define INTERPRETER_NEXT() { goto *handlers[program[i].kind]; }
+    #define INTERPRETER_DEF() try { { goto *handlers[program[i].kind]; }
+    
+    #define INTERPRETER_CASE(NAME)\
+        { Handler##NAME: \
+        auto n = program[i++].n; (void)n; {
+        //printf("at %d in %s\n", i - 1, #NAME);
+    #define INTERPRETER_ENDCASE() } INTERPRETER_NEXT() }
+    #define INTERPRETER_ENDDEF() INTERPRETER_EXIT: { } return 0; }\
+        catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }
+    #define INTERPRETER_DOEXIT() goto INTERPRETER_EXIT;
     
     #else // of ifdef INTERPRETER_USE_LOOP
     
@@ -887,9 +907,8 @@ int interpreter_core(const Program & programdata, int i)
         [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
         auto n = program[i++].n; (void)n; try {
         //printf("at %d in %s\n", i - 1, #NAME);
-    #define INTERPRETER_ENDCASE() } catch (const exception& e) {\
-        rethrow(s.programdata.lines[i], i, e);\
-    } INTERPRETER_NEXT() }
+    #define INTERPRETER_ENDCASE() } catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }\
+        INTERPRETER_NEXT() }
     #define INTERPRETER_ENDDEF() void _aowsgawgioaefwe(void){
     #define INTERPRETER_DOEXIT() return;
     
@@ -1170,7 +1189,7 @@ int interpreter_core(const Program & programdata, int i)
     INTERPRETER_ENDDEF()
 }
 
-#ifndef INTERPRETER_USE_LOOP
+#if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
 #define PFX(X) Handler##X
 const HandlerInfo handler = { TOKEN_TABLE };
 #undef PFX
@@ -1178,16 +1197,7 @@ const HandlerInfo handler = { TOKEN_TABLE };
 
 int interpret(const Program & programdata)
 {
-    #ifdef INTERPRETER_USE_LOOP
-    try { interpreter_core(programdata, 0); }
-    catch (const exception& e)
-    {
-        auto & lines = programdata.lines;
-        THROWSTR("Error on line " + std::to_string(lines[i]) + ": " + e.what() + " (token " + std::to_string(i) + ")");
-    }
-    #else
     interpreter_core(programdata, 0);
-    #endif
     return 0;
 }
 

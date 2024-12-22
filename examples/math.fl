@@ -9,3 +9,6 @@
 -15023 2 >> !print
 -15023 63 >> !print # right-shift is SAR, not SHR
 
+0x100 !print # hex literals are supported
+0x3141 !print
+-0x100 !print

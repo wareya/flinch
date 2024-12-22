@@ -41,10 +41,11 @@ void f_printstr(vector<DynamicType> & stack)
         a = &v.as_ref().ref()->as_array();
     else
         return;
-    for (auto n : *a->items())
+    auto & list = *a->items();
+    for (size_t i = 0; i < list.size(); i++)
     {
-        if (n.is_int())
-            printf("%c", (char)n.as_int());
+        if (list[i].is_int())
+            printf("%c", (char)list[i].as_int());
     }
     puts("");
 }

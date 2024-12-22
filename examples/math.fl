@@ -12,3 +12,5 @@
 0x100 !print # hex literals are supported
 0x3141 !print
 -0x100 !print
+
+( 4 - 4 - 4 - 4 - 4 - 4 - 4 - 4 ) !print

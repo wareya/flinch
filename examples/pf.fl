@@ -1,0 +1,153 @@
+heap$
+aaaa^
+    heap$
+^^
+( 2000 -> $size$ )
+#( 503 -> $size$ )
+#( 202 -> $size$ )
+( 8381853 -> $seed$ )
+
+lcg^
+    ( ( ( seed + 1 ) * 141853155 ) & 0xFFFFFFFF -> $seed )
+    seed
+^^
+
+generate_grid^
+    $size$ ->
+    [ ] $grid$ ->
+    
+    ( size * size -> $size2$ )
+    
+    ( -1 -> $i$ )
+    :loopend goto loopstart:
+        grid i ( .lcg > 1477603712 ) @+
+    loopend: $i size2 :loopstart inc_goto_until
+    
+    ( 1 -> $grid @ ( size * 2 - 2 ) )
+    ( 1 -> $grid @ ( size * ( size - 2 ) + 1 ) )
+    ( -1 -> $n$ )
+    :loopend2 goto loopstart2:
+        ( 0 -> $grid @ ( n * size ) )
+        ( 0 -> $grid @ ( n * size + size - 1 ) )
+        ( 0 -> $grid @ ( n ) )
+        ( 0 -> $grid @ ( n + size * ( size - 1 ) ) )
+    loopend2: $n size :loopstart2 inc_goto_until
+    
+    grid
+^^
+
+get_neighbors^
+    $size$ ->
+    $index$ ->
+    [ ( index - 1 )
+      ( index + 1 )
+      ( index - size )
+      ( index + size ) ]
+^^
+
+pushraw^
+    $val$ -> # array
+    $heap$ -> # array reference
+    
+    heap @? :next if_goto
+    ( val -> heap ) return
+    next:
+    ( (( heap :: )) @ 0 <= val @ 0 ) :next2 if_goto
+        heap :: $a$ ->
+        val heap ->
+        heap a .pushraw
+        return
+    next2:
+        heap :: 4 @ 1 + 1 & heap 4 @ ->
+        ( heap @ ( 2 + (( ( heap @ 4 ) :: )) ) ) val .pushraw
+^^
+
+push^
+    $val$ ->
+    $heap$ ->
+    heap [ ( val @ 0 ) ( val @ 1 ) [ ] [ ] 0 ] .pushraw
+^^
+
+pop^
+    $heap$ ->
+    ( (( heap :: )) @ 1 ) # shove return values onto stack
+    ( (( heap :: )) @ 0 )
+    ( heap @ 3 ) @? 0 == :skip if_goto
+        ( heap @- 3 -> $t$ )
+        heap 3 0 @+
+        ( heap @ 2 ) t .pushraw
+    skip:
+    ( heap @- 2 ) heap ->
+^^
+
+dijkstra^
+    $grid$ ->
+    ( size * ( size - 2 ) + 1 -> $start$ )
+    ( size * 2 - 2 -> $end$ )
+    ( size * size -> $size2$ )
+
+    ( 1.0 / 0.0 -> $inf$ )
+    
+    ( -1 -> $i$ )
+    [
+    :loopend goto loopstart:
+        inf
+    loopend: $i size2 :loopstart inc_goto_until
+    ]
+    $distances$ ->
+    ( 0 -> $distances @ start )
+    
+    [ ] $heap$ ->
+    
+    $heap [ 0 start ] .push
+
+    loop2:
+        $heap .pop
+        $current_distance$ ->
+        $current_index$ ->
+
+        ( current_index != end ) :nonret if_goto
+            current_distance return
+        nonret:
+
+        ( current_distance > distances @ current_index ) :loop2 if_goto
+
+        current_index size .get_neighbors $neighbors$ ->
+        
+        ( current_distance + 1 -> $new_dist$ )
+        ( -1 -> $i )
+        :loopend2 goto loopstart2:
+            ( neighbors @ i -> $neighbor$ )
+            ( ( grid @ neighbor ) == 0 ) :loopend2 if_goto
+            ( new_dist >= distances @ neighbor ) :loopend2 if_goto
+            
+            ( new_dist -> ( $distances @ neighbor ) )
+            $heap [ new_dist neighbor ] .push
+        loopend2: $i 4 :loopstart2 inc_goto_until
+    
+    heap @? :loop2 if_goto
+
+    -1
+^^
+#"----" !printstr
+#1.0 inf != !print
+#1.0 inf == !print
+#1.0 inf < !print
+#1.0 inf >= !print
+#1.0 inf <= !print
+#1.0 inf > !print
+#"----" !printstr
+#inf 1.0 != !print
+#inf 1.0 == !print
+#inf 1.0 >= !print
+#inf 1.0 < !print
+#inf 1.0 > !print
+#inf 1.0 <= !print
+#"----" !printstr
+
+size .generate_grid $grid$ ->
+#grid !print
+grid .dijkstra $shortest_path_cost$ ->
+shortest_path_cost !print
+
+"done" !printstr

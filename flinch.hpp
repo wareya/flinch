@@ -13,6 +13,7 @@
 #include <algorithm>
 
 #include <unordered_map>
+#include <unordered_set>
 #include <initializer_list>
 
 #ifndef NOINLINE
@@ -64,7 +65,7 @@ PFX(Assign),PFX(AsLocal),\
 PFX(Return),PFX(Call),\
     PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
     PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
-PFX(CmpEQ),PFX(CmpNE),PFX(CmpLE),PFX(CmpGE),PFX(CmpLT),PFX(CmpGT),\
+    PFX(        CmpEQ),PFX(        CmpNE),PFX(        CmpLE),PFX(        CmpGE),PFX(        CmpLT),PFX(        CmpGT),\
 PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
 PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
 PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
@@ -89,93 +90,84 @@ struct DynamicType;
 
 typedef shared_ptr<vector<DynamicType>> ArrayData;
 
-#ifndef MEMORY_UNSAFE_REFERENCES
+struct GCableInfo {
+    ArrayData items;
+    DynamicType * refdata;
+    size_t n;
+};
+std::unordered_set<GCableInfo *> g_gcinfo_young;
+template <typename U>
+static GCableInfo * make_gcableinfo(U && items, DynamicType * addr)
+{
+    auto ret = new GCableInfo{std::forward<ArrayData>(items), addr, 1};
+    g_gcinfo_young.insert(ret);
+    return ret;
+}
+
 struct Ref {
-    struct RefInfo {
-        // this backing vector will never be resized or reallocated, so it's OK to store a pointer directly into it
-        ArrayData backing;
-        DynamicType * refdata;
-        size_t n;
-    };
-    RefInfo * info;
+    GCableInfo * info;
     DynamicType * ref() { return info->refdata; }
+    
     ~Ref();
     
-    Ref(RefInfo * r) noexcept : info(r) { }
-    Ref(const Ref& r) noexcept { info = r.info; info->n += 1; }
-    Ref(Ref&& r) noexcept { info = r.info; r.info = nullptr; }
-    Ref & operator=(const Ref& r) noexcept { info = r.info; info->n += 1; return *this; }
-    Ref & operator=(Ref&& r) noexcept { info = r.info; r.info = nullptr; return *this; }
+    Ref(GCableInfo * r) noexcept : info(r) { }
+    Ref(const Ref & r) noexcept { info = r.info; if(info) info->n += 1; }
+    Ref(Ref && r) noexcept { info = r.info; r.info = nullptr; }
+    NOINLINE Ref & operator=(const Ref & r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; if(info) info->n += 1; return *this; }
+    Ref & operator=(Ref && r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; r.info = nullptr; return *this; }
 };
 
-NOINLINE Ref::~Ref() { if (!info) return; info->n -= 1; if (!info->n) delete info; }
+Ref::~Ref() { if (!info || --(info->n)) return; { delete info; g_gcinfo_young.erase(info); } }
 
-#define MAKEREF return Ref{new Ref::RefInfo{backing, &(*backing).at(i), 1}};
-#else // MEMORY_SAFE_REFERENCES
-struct Ref {
-    DynamicType * refdata;
-    DynamicType * ref() { return refdata; }
-    ~Ref();
-};
-NOINLINE Ref::~Ref() { } // ???? why does  this make the interpreter faster
+#define MAKEREF return Ref{make_gcableinfo(items, &(*items).at(i))};
 
-#define MAKEREF return Ref{&(*backing).at(i)};
-#endif // MEMORY_SAFE_REFERENCES
-
-template <typename T>
-ArrayData make_array_data(T x) { return make_shared<vector<DynamicType>>(x); }
+ArrayData make_array_data(vector<DynamicType> x) { return make_shared<vector<DynamicType>>(x); }
 ArrayData make_array_data() { return make_shared<vector<DynamicType>>(); }
 
 struct Label { int loc; };
 struct Array {
-    struct ArrayInfo {
-        ArrayData items;
-        size_t n;
-    };
-    
-    static ArrayInfo * make_arrayinfo(ArrayData && backing)
-    {
-        return new Array::ArrayInfo{backing, 1};
-    }
-    
-    ArrayInfo * info;
+    GCableInfo * info;
     ArrayData & items();
-    ~Array();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
     // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
     // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
     void dirtify();
     
-    Array(ArrayInfo * r) noexcept : info(r) { }
-    Array(const Array & r) noexcept { info = r.info; info->n += 1; }
+    ~Array();
+    
+    Array(GCableInfo * r) noexcept : info(r) { }
+    Array(const Array & r) noexcept { info = r.info; if(info) info->n += 1; }
     Array(Array && r) noexcept { info = r.info; r.info = nullptr; }
-    Array & operator=(const Array & r) noexcept { info = r.info; info->n += 1; return *this; }
-    Array & operator=(Array && r) noexcept { info = r.info; r.info = nullptr; return *this; }
+    NOINLINE Array & operator=(const Array & r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; if(info) info->n += 1; return *this; }
+    Array & operator=(Array && r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; r.info = nullptr; return *this; }
 };
-NOINLINE ArrayData & Array::items() { return info->items; }
-NOINLINE Array make_array(ArrayData && backing) { return Array { Array::make_arrayinfo(std::move(backing)) };}
-NOINLINE Array::~Array() { if (!info) return; info->n -= 1; if (!info->n) delete info; }
+ArrayData & Array::items() { return info->items; }
+Array::~Array() { if (!info || --(info->n)) return; { delete info; g_gcinfo_young.erase(info); } }
+
+NOINLINE Array make_array(ArrayData backing) { return Array { make_gcableinfo(backing, 0) }; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
     variant<int64_t, double, Label, Func, Ref, Array> value;
 
-    DynamicType() : value((int64_t)0) {}
-    DynamicType(int64_t v) : value((int64_t)v) {}
-    DynamicType(int v) : value((int64_t)v) {}
-    DynamicType(short v) : value((int64_t)v) {}
-    DynamicType(char v) : value((int64_t)v) {}
-    DynamicType(double v) : value((double)v) {}
-    DynamicType(const Ref & v) : value(v) {}
-    DynamicType(const Label & l) : value(l) {}
-    DynamicType(const Func & f) : value(f) {}
-    DynamicType(const Array & a) : value(a) {}
+    DynamicType() : value((int64_t)0) { }
+    DynamicType(int64_t v) : value((int64_t)v) { }
+    DynamicType(int v) : value((int64_t)v) { }
+    DynamicType(short v) : value((int64_t)v) { }
+    DynamicType(char v) : value((int64_t)v) { }
+    DynamicType(double v) : value((double)v) { }
+    DynamicType(const Label & l) : value(l) { }
+    DynamicType(const Func & f) : value(f) { }
+    DynamicType(const Array & a) : value(a) { }
+    DynamicType(const Ref & v) : value(v) { }
+    DynamicType(Array && a) : value(a) { }
+    DynamicType(Ref && v) : value(v) { }
 
-    DynamicType(const DynamicType& other) = default;
-    DynamicType(DynamicType&& other) noexcept = default;
-    DynamicType& operator=(const DynamicType& other) = default;
-    DynamicType& operator=(DynamicType&& other) noexcept = default;
+    DynamicType(const DynamicType & other) = default;
+    DynamicType(DynamicType && other) noexcept = default;
+    DynamicType& operator=(const DynamicType & other) = default;
+    DynamicType& operator=(DynamicType && other) noexcept = default;
     
     #define INFIX(WRAPPER1, WRAPPER2, OP, OP2, WX)\
         if (holds_alternative<int64_t>(value) && holds_alternative<int64_t>(other.value))\
@@ -196,12 +188,12 @@ struct DynamicType {
     DynamicType operator/(const DynamicType& other) const { INFIX(DynamicType, DynamicType, /, /, ) }
     DynamicType operator%(const DynamicType& other) const { INFIX(DynamicType, fmod, %, COMMA, ) }
     
-    bool operator>=(const DynamicType& other) const { INFIX(!!, !!, >=, >=, ) }
-    bool operator<=(const DynamicType& other) const { INFIX(!!, !!, <=, <=, ) }
     bool operator==(const DynamicType& other) const { INFIX(!!, !!, ==, ==, ) }
     bool operator!=(const DynamicType& other) const { INFIX(!!, !!, !=, !=, ) }
-    bool operator>(const DynamicType& other) const { INFIX(!!, !!, >, >, ) }
-    bool operator<(const DynamicType& other) const { INFIX(!!, !!, <, <, ) }
+    bool operator>=(const DynamicType& other) const { INFIX(!!, !!, >=, >=, ) }
+    bool operator<=(const DynamicType& other) const { INFIX(!!, !!, <=, <=, ) }
+    bool operator> (const DynamicType& other) const { INFIX(!!, !!,  >,  >, ) }
+    bool operator< (const DynamicType& other) const { INFIX(!!, !!,  <,  <, ) }
     
     DynamicType operator<<(const DynamicType& other) const { INFIX(int64_t, int64_t, <<, <<, int64_t) }
     DynamicType operator>>(const DynamicType& other) const { INFIX(int64_t, int64_t, >>, >>, int64_t) }
@@ -257,20 +249,29 @@ struct DynamicType {
     
     DynamicType clone(bool deep)
     {
-        while (is_ref()) *this = *as_ref().ref();
-        if (!is_array()) return *this;
-        auto t = make_array_data(*as_array().items());
-        as_array().info = Array::make_arrayinfo(std::move(t));
-        if (!deep) return *this;
-        for (auto & item : *as_array().items()) item = item.clone(deep);
-        return *this;
+        if (is_ref()) return *as_ref().ref();
+        else if (!is_array()) return *this;
+        auto n = make_array(make_array_data(*as_array().items()));
+        if (!deep) return n;
+        for (auto & item : *n.items()) item = item.clone(deep);
+        return n;
     }
 };
 
-inline Ref make_ref(ArrayData & backing, size_t i) { MAKEREF }
+inline Ref make_ref(ArrayData items, size_t i) { MAKEREF }
 
 //NOINLINE void Array::dirtify() { if (info && info->n != 1) info->items = make_array_data(*info->items); }
-void Array::dirtify() { if (info && info->n > 1) info->items = make_array_data(*info->items); }
+NOINLINE void Array::dirtify()
+{
+    if (info && !info->items.unique())
+    {
+        auto old = info->items;
+        info->items = make_array_data(*info->items.get());
+        for (auto & x : *old)
+            x = 0;
+    }
+}
+//NOINLINE void Array::dirtify() { }
 
 struct Program {
     vector<Token> program;
@@ -456,7 +457,8 @@ Program load_program(string text)
                 nums.push_back(i++);
             else
             {
-                while (ops.size() && prec[program_texts[i]] < prec[program_texts[ops.back()]])
+                //while (ops.size() && prec[program_texts[i]] < prec[program_texts[ops.back()]])
+                while (ops.size() && prec[program_texts[i]] <= prec[program_texts[ops.back()]])
                     nums.push_back(vec_pop_back(ops));
                 ops.push_back(i++);
             }
@@ -468,16 +470,17 @@ Program load_program(string text)
         
         // parallel move; we go through this effort to keep lines and texts in sync
         vector<string> texts_s;
-        for (size_t j = 0; j < nums.size(); j++)
-            texts_s.push_back(std::move(program_texts[nums[j]]));
-        for (size_t j = 0; j < nums.size(); j++)
-            program_texts[j + start_i] = std::move(texts_s[j]);
-        
         vector<int> lines_s;
         for (size_t j = 0; j < nums.size(); j++)
+        {
+            texts_s.push_back(std::move(program_texts[nums[j]]));
             lines_s.push_back(lines[nums[j]]);
+        }
         for (size_t j = 0; j < nums.size(); j++)
+        {
+            program_texts[j + start_i] = std::move(texts_s[j]);
             lines[j + start_i] = lines_s[j];
+        }
         
         program_texts.erase(program_texts.begin() + i);
         lines.erase(lines.begin() + i);
@@ -491,6 +494,7 @@ Program load_program(string text)
     trivial_ops.insert({"inc_goto_until", ForLoop});
     trivial_ops.insert({"punt", Punt});
     trivial_ops.insert({"punt_n", PuntN});
+    trivial_ops.insert({"do_cycle_collection", PuntN});
     
     trivial_ops.insert({"->", Assign});
     
@@ -523,8 +527,8 @@ Program load_program(string text)
     trivial_ops.insert({"!=", CmpNE});
     trivial_ops.insert({"<=", CmpLE});
     trivial_ops.insert({">=", CmpGE});
-    trivial_ops.insert({"<", CmpLT});
-    trivial_ops.insert({">", CmpGT});
+    trivial_ops.insert({"<",  CmpLT});
+    trivial_ops.insert({">",  CmpGT});
     
     trivial_ops.insert({"::", Clone});
     trivial_ops.insert({"::!", CloneDeep});
@@ -731,12 +735,14 @@ Program load_program(string text)
             prog_erase(i + 2);
             prog_erase(i-- + 1);
         }
+        /*
         if (still_valid() && program[i].kind >= CmpEQ && program[i].kind <= CmpGT && program[i+1].kind == IfGotoLabel)
         {
             program[i].kind = TKind(IfGotoLabelEQ + (program[i].kind - CmpEQ));
             program[i].n = program[i+1].n;
             prog_erase(i-- + 1);
         }
+        */
     }
 
     //for (auto & s : program)
@@ -812,7 +818,7 @@ struct ProgramState {
     const Program & programdata;
     const vector<Func> & funcs;
     vector<DynamicType> vars_default;
-    vector<iword_t> callstack, fstack;
+    vector<iword_t> callstack;
     
     ArrayData globals;
     DynamicType * globals_raw;
@@ -823,6 +829,97 @@ struct ProgramState {
     
     vector<vector<DynamicType>> evalstacks;
     vector<DynamicType> evalstack;
+    
+    void gc_trace_Array(Array & data)
+    {
+        gc_trace_GCableInfo(data.info);
+    }
+    void gc_trace_Ref(Ref & data)
+    {
+        gc_trace_GCableInfo(data.info);
+    }
+    void gc_trace_DynamicType(DynamicType & data)
+    {
+        if (data.is_array())
+            gc_trace_Array(data.as_array());
+        else if (data.is_ref())
+            gc_trace_Ref(data.as_ref());
+    }
+    void gc_trace_ArrayData(ArrayData & data)
+    {
+        for (auto & x : *data)
+            gc_trace_DynamicType(x);
+    }
+    
+    void gc_trace_GCableInfo(GCableInfo * info)
+    {
+        if (info && (info->n & 0x8000000000000000))
+        {
+            info->n ^= 0x8000000000000000;
+            if (info->items) gc_trace_ArrayData(info->items);
+        }
+    }
+    size_t gc_prevsize = 0;
+    NOINLINE void do_gc(unordered_set<GCableInfo *> & gcinfo)
+    {
+        for (auto & x : gcinfo)
+            x->n |= 0x8000000000000000;
+        
+        gc_trace_ArrayData(globals);
+        
+        gc_trace_ArrayData(varstack);
+        for (auto & x : varstacks)
+            gc_trace_ArrayData(x);
+        
+        for (auto & x : evalstack)
+            gc_trace_DynamicType(x);
+        for (auto & y : evalstacks)
+        {
+            for (auto & x : y)
+                gc_trace_DynamicType(x);
+        }
+        
+        unordered_set<GCableInfo *> garbage;
+        for (auto & x : gcinfo)
+        {
+            if (x->n & 0x8000000000000000)
+                garbage.insert(x);
+        }
+        for (auto & x : garbage)
+            x->items = 0;
+        
+        unordered_set<GCableInfo *> not_garbage;
+        for (auto & x : gcinfo)
+        {
+            if (x->n & 0x8000000000000000)
+                delete x;
+            else
+                not_garbage.insert(x);
+        }
+        g_gcinfo_young = not_garbage;
+        
+        gc_prevsize = gcinfo.size();
+    }
+    size_t young_collections = 0;
+    void do_gc()
+    {
+        if (g_gcinfo_young.size() == 0)
+            return;
+        
+        size_t l = 256;
+        size_t d = 32;
+        if ((g_gcinfo_young.size() + l) < (gc_prevsize + l) * d && (g_gcinfo_young.size() + l) > (gc_prevsize + l) / d)
+            return;
+        
+        do_gc(g_gcinfo_young);
+    }
+    
+    ~ProgramState()
+    {
+        for (auto & x : g_gcinfo_young)
+            delete x;
+        g_gcinfo_young.clear();
+    }
 };
 
 #if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
@@ -839,14 +936,13 @@ int interpreter_core(const Program & programdata, int i)
     for (size_t i = 0; i < programdata.token_varnames.size(); i++)
         vars_default.push_back(0);
     
-    auto s = ProgramState{
-        programdata, programdata.funcs, vars_default, {}, {},
+    auto s = ProgramState {
+        programdata, programdata.funcs, vars_default, {},
         make_array_data(vars_default), 0, {}, make_array_data(vars_default), 0, {}, {}
     };
     
     s.globals_raw = s.globals->data();
     s.varstack_raw = s.varstack->data();
-    s.fstack.push_back(0);
     
     #define valreq(X) if (s.evalstack.size() < X) THROWSTR("internal interpreter error: not enough values on stack");
     #define valpush(X) s.evalstack.push_back(X)
@@ -862,7 +958,7 @@ int interpreter_core(const Program & programdata, int i)
     #define INTERPRETER_CASE(NAME) case NAME: i += 1; {
     #define INTERPRETER_ENDCASE() } break;
     #define INTERPRETER_ENDDEF() default: THROWSTR("internal interpreter error: unknown opcode"); } } }\
-        catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }
+        catch (const exception& e) { rethrow(s.programdata.lines[i-1], i-1, e); }
     #define INTERPRETER_DOEXIT() return 0;
     
     #elif defined INTERPRETER_USE_CGOTO
@@ -880,7 +976,7 @@ int interpreter_core(const Program & programdata, int i)
         //printf("at %d in %s\n", i - 1, #NAME);
     #define INTERPRETER_ENDCASE() } INTERPRETER_NEXT() }
     #define INTERPRETER_ENDDEF() INTERPRETER_EXIT: { } return 0; }\
-        catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }
+        catch (const exception& e) { rethrow(s.programdata.lines[i-1], i-1, e); }
     #define INTERPRETER_DOEXIT() goto INTERPRETER_EXIT;
     
     #else // of ifdef INTERPRETER_USE_LOOP
@@ -892,7 +988,7 @@ int interpreter_core(const Program & programdata, int i)
         extern "C" [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
         auto n = program[i++].n; (void)n; try {
         //printf("at %d in %s\n", i - 1, #NAME);
-    #define INTERPRETER_ENDCASE() } catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }\
+    #define INTERPRETER_ENDCASE() } catch (const exception& e) { rethrow(s.programdata.lines[i-1], i-1, e); }\
         INTERPRETER_NEXT() }
     #define INTERPRETER_ENDDEF() void _aowsgawgioaefwe(void){
     #define INTERPRETER_DOEXIT() return;
@@ -912,10 +1008,12 @@ int interpreter_core(const Program & programdata, int i)
         valpush(s.funcs[n]);
     
     INTERPRETER_MIDCASE(FuncEnd)
+        s.varstack->clear();
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
     INTERPRETER_MIDCASE(Return)
+        s.varstack->clear();
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
@@ -941,22 +1039,20 @@ int interpreter_core(const Program & programdata, int i)
         THROWSTR("internal interpreter error: tried to execute opcode that's supposed to be deleted");
     
     INTERPRETER_MIDCASE(Call)
-        Func f = valpop().as_func();
         s.callstack.push_back(i);
-        s.fstack.push_back(f.name);
-        s.varstacks.push_back(s.varstack);
+        Func f = valpop().as_func();
+        i = f.loc;
+        s.varstacks.push_back(std::move(s.varstack));
         s.varstack = make_array_data(s.vars_default);
         s.varstack_raw = s.varstack->data();
-        i = f.loc;
     
     INTERPRETER_MIDCASE(FuncCall)
-        Func f = s.funcs[n];
         s.callstack.push_back(i);
-        s.fstack.push_back(f.name);
-        s.varstacks.push_back(s.varstack);
+        Func f = s.funcs[n];
+        i = f.loc;
+        s.varstacks.push_back(std::move(s.varstack));
         s.varstack = make_array_data(s.vars_default);
         s.varstack_raw = s.varstack->data();
-        i = f.loc;
     
     INTERPRETER_MIDCASE(Assign) valreq(2);
         Ref ref = std::move(valpop().as_ref());
@@ -989,6 +1085,13 @@ int interpreter_core(const Program & programdata, int i)
             THROWSTR("Tried to use for loop with non-integer");
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num) i = dest.loc;
+        /*
+        if ((*s.varstack)[0].is_array())
+        {
+            printf("%zd %zd\n", s.evalstack.size(), s.callstack.size());
+            printf("%zd?!?!\n", (*s.varstack)[0].as_array().items()->size());
+        }
+        */
     INTERPRETER_MIDCASE(ForLoopLabel) valreq(2);
         auto num = valpop();
         auto ref = std::move(valpop().as_ref());
@@ -996,6 +1099,13 @@ int interpreter_core(const Program & programdata, int i)
             THROWSTR("Tried to use for loop with non-integer");
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num) i = n;
+        /*
+        if ((*s.varstack)[0].is_array())
+        {
+            printf("%zd %zd\n", s.evalstack.size(), s.callstack.size());
+            printf("%zd?!?!\n", (*s.varstack)[0].as_array().items()->size());
+        }
+        */
     INTERPRETER_MIDCASE(ForLoopLocal)
         // FIXME: add a global version
         auto & _v = s.varstack_raw[program[i-1].extra_1];
@@ -1004,6 +1114,13 @@ int interpreter_core(const Program & programdata, int i)
         auto & v = _v.as_int();
         int64_t num = (iwordsigned_t)program[i-1].extra_2;
         if (++v < num) i = n;
+        /*
+        if ((*s.varstack)[0].is_array())
+        {
+            printf("%zd %zd\n", s.evalstack.size(), s.callstack.size());
+            printf("%zd?!?!\n", (*s.varstack)[0].as_array().items()->size());
+        }
+        */
     
     // INTERPRETER_MIDCASE_GOTOLABELCMP
     #define IMGLC(X, OP) \
@@ -1093,19 +1210,19 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(ArrayIndex) valreq(2);
         auto n = valpop().as_into_int();
-        auto & val = valback();
+        auto val = valpop();
         auto a = val.as_array_ptr_thru_ref();
         if (val.is_array())
-            val = (*a->items()).at(n);
+            valpush((*a->items()).at(n));
         else
-            val = {make_ref(a->items(), (size_t)n)};
+            valpush(make_ref(a->items(), (size_t)n));
     
     INTERPRETER_MIDCASE(Clone)
-        auto & x = valback();
-        x = x.clone(false);
+        auto x = valpop();
+        valpush(x.clone(false));
     INTERPRETER_MIDCASE(CloneDeep)
-        auto & x = valback();
-        x = x.clone(true);
+        auto x = valpop();
+        valpush(x.clone(true));
     
     INTERPRETER_MIDCASE(ArrayLen)
         auto & a = valback();
@@ -1117,20 +1234,22 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(ArrayPushIn) valreq(3);
         auto inval = valpop();
-        auto n = valpop().as_into_int();
+        uint64_t n = valpop().as_into_int();
         auto v = valpop();
         Array * a = v.as_array_ptr_thru_ref();
         a->dirtify();
-        a->items()->insert(a->items()->begin() + n, inval);
+        if (a->items()->size() < n) THROWSTR("tried to access past end of array");
+        a->items()->insert(a->items()->begin() + n, std::move(inval));
     
     INTERPRETER_MIDCASE(ArrayPopOut) valreq(2);
-        auto n = valpop().as_into_int();
+        uint64_t n = valpop().as_into_int();
         auto & v = valback();
         Array * a = v.as_array_ptr_thru_ref();
         a->dirtify();
         auto ret = (*a->items()).at(n);
+        if (a->items()->size() <= n) THROWSTR("tried to access past end of array");
         a->items()->erase(a->items()->begin() + n);
-        v = ret;
+        v = std::move(ret);
     
     INTERPRETER_MIDCASE(ArrayConcat) valreq(2);
         auto vr = valpop();
@@ -1141,7 +1260,7 @@ int interpreter_core(const Program & programdata, int i)
         
         newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
         newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
-        vl = newarray;
+        vl = std::move(newarray);
     
     INTERPRETER_MIDCASE(StringLiteral)
         valpush(make_array(make_array_data(s.programdata.get_token_stringval(n))));

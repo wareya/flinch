@@ -23,6 +23,7 @@
 //#define THROWSTR(X) throw (X)
 template <typename T> [[noreturn]] void THROWSTR(T X) { throw std::runtime_error(X); }
 //template <typename T> [[noreturn]] void THROWSTR(T X) { throw X; }
+//template <typename T> [[noreturn]] void THROWSTR(T) { throw; }
 
 template <typename T>
 [[noreturn]] void rethrow(int line, int i, T & e)
@@ -30,15 +31,16 @@ template <typename T>
     THROWSTR("Error on line " + std::to_string(line) + ": " + e.what() + " (token " + std::to_string(i) + ")");
 }
 
-template <typename T> T vec_pop_back(std::vector<T> & v)
-{
-    T ret = std::move(v.back());
-    v.pop_back();
-    return ret;
-}
 template <typename T> T & vec_at_back(std::vector<T> & v)
 {
-    return v.at(v.size()-1);
+    if (!v.size()) THROWSTR("tried to access empty buffer");
+    return v.back();
+}
+template <typename T> T vec_pop_back(std::vector<T> & v)
+{
+    T ret = std::move(vec_at_back(v));
+    v.pop_back();
+    return ret;
 }
 
 using namespace std;
@@ -49,43 +51,25 @@ const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 
 #define TOKEN_TABLE \
 PFX(GlobalVar),PFX(GlobalVarDec),PFX(GlobalVarLookup),PFX(GlobalVarDecLookup),\
-PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
-PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),\
-PFX(LabelDec),PFX(LabelLookup),\
-PFX(Integer),\
-PFX(IntegerInline),\
-PFX(IntegerInlineBigDec),\
-PFX(IntegerInlineBigBin),\
-PFX(Double),\
-PFX(DoubleInline),\
+    PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
+    PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
+PFX(Integer),PFX(IntegerInline),PFX(IntegerInlineBigDec),PFX(IntegerInlineBigBin),PFX(Double),PFX(DoubleInline),\
 PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
-PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
-PFX(AddAsLocal),PFX(SubAsLocal),PFX(MulAsLocal),PFX(DivAsLocal),PFX(ModAsLocal),\
-PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
-PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
-PFX(And),PFX(Or),PFX(Xor),\
-PFX(Shl),PFX(Shr),\
-PFX(BoolAnd),PFX(BoolOr),\
-PFX(Assign),\
-PFX(AsLocal),\
+    PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
+    PFX(AddAsLocal),PFX(SubAsLocal),PFX(MulAsLocal),PFX(DivAsLocal),PFX(ModAsLocal),\
+    PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
+    PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
+PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolAnd),PFX(BoolOr),\
+PFX(Assign),PFX(AsLocal),\
 PFX(Return),PFX(Call),\
-PFX(IfGoto),PFX(IfGotoLabel),\
-PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),\
-PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
-PFX(Goto),PFX(GotoLabel),\
-PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
-PFX(ScopeOpen),PFX(ScopeClose),\
+    PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
+    PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
 PFX(CmpEQ),PFX(CmpNE),PFX(CmpLE),PFX(CmpGE),PFX(CmpLT),PFX(CmpGT),\
-PFX(ArrayBuild),\
-PFX(ArrayIndex),\
-PFX(Clone),\
-PFX(CloneDeep),\
-PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
-PFX(StringLiteral),\
-PFX(StringLitReference),\
+PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
+PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
+PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
+PFX(StringLiteral),PFX(StringLitReference),\
 PFX(BuiltinCall),\
-PFX(Punt),\
-PFX(PuntN),\
 PFX(Exit)
 
 // token kind
@@ -96,7 +80,8 @@ enum TKind : iword_t {
 };
 #undef PFX
 
-struct Token { TKind kind; iword_t n, extra_1, extra_2; };
+//struct Token { TKind kind; iword_t n, extra_1, extra_2; };
+struct Token { iword_t kind, n, extra_1, extra_2; };
 struct Func { iword_t loc, len, name; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
@@ -117,9 +102,9 @@ struct Ref {
     ~Ref();
     
     Ref(RefInfo * r) noexcept : info(r) { }
-    NOINLINE Ref(const Ref& r) noexcept { info = r.info; info->n += 1; }
+    Ref(const Ref& r) noexcept { info = r.info; info->n += 1; }
     Ref(Ref&& r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Ref & operator=(const Ref& r) noexcept { info = r.info; info->n += 1; return *this; }
+    Ref & operator=(const Ref& r) noexcept { info = r.info; info->n += 1; return *this; }
     Ref & operator=(Ref&& r) noexcept { info = r.info; r.info = nullptr; return *this; }
 };
 
@@ -163,9 +148,9 @@ struct Array {
     void dirtify();
     
     Array(ArrayInfo * r) noexcept : info(r) { }
-    NOINLINE Array(const Array & r) noexcept { info = r.info; info->n += 1; }
+    Array(const Array & r) noexcept { info = r.info; info->n += 1; }
     Array(Array && r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Array & operator=(const Array & r) noexcept { info = r.info; info->n += 1; return *this; }
+    Array & operator=(const Array & r) noexcept { info = r.info; info->n += 1; return *this; }
     Array & operator=(Array && r) noexcept { info = r.info; r.info = nullptr; return *this; }
 };
 NOINLINE ArrayData & Array::items() { return info->items; }
@@ -174,18 +159,18 @@ NOINLINE Array::~Array() { if (!info) return; info->n -= 1; if (!info->n) delete
 
 // DynamicType can hold any of these types
 struct DynamicType {
-    std::variant<int64_t, double, Ref, Label, Func, Array> value;
+    variant<int64_t, double, Label, Func, Ref, Array> value;
 
     DynamicType() : value((int64_t)0) {}
-    DynamicType(int64_t v) : value(v) {}
+    DynamicType(int64_t v) : value((int64_t)v) {}
     DynamicType(int v) : value((int64_t)v) {}
     DynamicType(short v) : value((int64_t)v) {}
     DynamicType(char v) : value((int64_t)v) {}
-    DynamicType(double v) : value(v) {}
-    DynamicType(const Ref& v) : value(v) {}
-    DynamicType(const Label& l) : value(l) {}
-    DynamicType(const Func& f) : value(f) {}
-    DynamicType(const Array& a) : value(a) {}
+    DynamicType(double v) : value((double)v) {}
+    DynamicType(const Ref & v) : value(v) {}
+    DynamicType(const Label & l) : value(l) {}
+    DynamicType(const Func & f) : value(f) {}
+    DynamicType(const Array & a) : value(a) {}
 
     DynamicType(const DynamicType& other) = default;
     DynamicType(DynamicType&& other) noexcept = default;
@@ -193,15 +178,15 @@ struct DynamicType {
     DynamicType& operator=(DynamicType&& other) noexcept = default;
     
     #define INFIX(WRAPPER1, WRAPPER2, OP, OP2, WX)\
-        if (std::holds_alternative<int64_t>(value) && std::holds_alternative<int64_t>(other.value))\
+        if (holds_alternative<int64_t>(value) && holds_alternative<int64_t>(other.value))\
             return WRAPPER1(WX(std::get<int64_t>(value)) OP WX(std::get<int64_t>(other.value)));\
-        else if (std::holds_alternative<double>(value) && std::holds_alternative<double>(other.value))\
+        else if (holds_alternative<double>(value) && holds_alternative<double>(other.value))\
             return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<double>(other.value)));\
-        else if (std::holds_alternative<int64_t>(value) && std::holds_alternative<double>(other.value))\
+        else if (holds_alternative<int64_t>(value) && holds_alternative<double>(other.value))\
             return WRAPPER2(WX(std::get<int64_t>(value)) OP2 WX(std::get<double>(other.value)));\
-        else if (std::holds_alternative<double>(value) && std::holds_alternative<int64_t>(other.value))\
+        else if (holds_alternative<double>(value) && holds_alternative<int64_t>(other.value))\
             return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<int64_t>(other.value)));\
-        else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP " (or maybe) " #OP2);
+        else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP);
     
     #define COMMA ,
     
@@ -231,7 +216,7 @@ struct DynamicType {
     #define AS_TYPE_X(TYPE, TYPENAME)\
     TYPE & as_##TYPENAME()\
     {\
-        if (std::holds_alternative<TYPE>(value)) return std::get<TYPE>(value);\
+        if (holds_alternative<TYPE>(value)) return std::get<TYPE>(value);\
         THROWSTR("Value is not of type " #TYPENAME);\
     }
     
@@ -242,12 +227,12 @@ struct DynamicType {
     AS_TYPE_X(Func, func)
     AS_TYPE_X(Array, array)
     
-    bool is_int() { return std::holds_alternative<int64_t>(value); }
-    bool is_double() { return std::holds_alternative<double>(value); }
-    bool is_ref() { return std::holds_alternative<Ref>(value); }
-    bool is_label() { return std::holds_alternative<Label>(value); }
-    bool is_func() { return std::holds_alternative<Func>(value); }
-    bool is_array() { return std::holds_alternative<Array>(value); }
+    bool is_int() { return holds_alternative<int64_t>(value); }
+    bool is_double() { return holds_alternative<double>(value); }
+    bool is_ref() { return holds_alternative<Ref>(value); }
+    bool is_label() { return holds_alternative<Label>(value); }
+    bool is_func() { return holds_alternative<Func>(value); }
+    bool is_array() { return holds_alternative<Array>(value); }
     
     int64_t as_into_int()
     {
@@ -265,8 +250,8 @@ struct DynamicType {
         
     explicit operator bool() const
     {
-        if (std::holds_alternative<int64_t>(value)) return !!std::get<int64_t>(value);
-        else if (std::holds_alternative<double>(value)) return !!std::get<double>(value);
+        if (holds_alternative<int64_t>(value)) return !!std::get<int64_t>(value);
+        else if (holds_alternative<double>(value)) return !!std::get<double>(value);
         return true;
     }
     
@@ -904,7 +889,7 @@ int interpreter_core(const Program & programdata, int i)
     #define INTERPRETER_DEF() { handler.s[program[i].kind](s, i, program); return 0; } }
     
     #define INTERPRETER_CASE(NAME)\
-        [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
+        extern "C" [[clang::preserve_none]] void Handler##NAME(ProgramState & s, int i, const Token * program) { \
         auto n = program[i++].n; (void)n; try {
         //printf("at %d in %s\n", i - 1, #NAME);
     #define INTERPRETER_ENDCASE() } catch (const exception& e) { rethrow(s.programdata.lines[i], i, e); }\
@@ -1031,15 +1016,15 @@ int interpreter_core(const Program & programdata, int i)
     #define IMCUS(NAME, OP) \
     INTERPRETER_MIDCASE(NAME) valreq(2);\
         auto b = valpop();\
-        auto x = valpop();\
-        valpush(x OP b);
+        auto & x = valback();\
+        x = x OP b;
     
     // INTERPRETER_MIDCASE_UNARY_INTINLINE
     #define IMCUII(NAME, OP) \
-    INTERPRETER_MIDCASE(NAME)\
+    INTERPRETER_MIDCASE(NAME);\
         auto b = (int64_t)(iwordsigned_t)n;\
-        auto x = valpop();\
-        valpush(x OP b);
+        auto & x = valback();\
+        x = x OP b;
     
     // INTERPRETER_MIDCASE_UNARY_DUBINLINE
     #define IMCUDI(NAME, OP) \
@@ -1047,8 +1032,8 @@ int interpreter_core(const Program & programdata, int i)
         uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;\
         double d;\
         memcpy(&d, &dec, sizeof(dec));\
-        auto x = valpop();\
-        valpush(x OP d);
+        auto & x = valback();\
+        x = x OP d;
     
     // INTERPRETER_MIDCASE_UNARY_ASSIGN
     #define IMCUA(NAME, OP) \
@@ -1108,13 +1093,12 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(ArrayIndex) valreq(2);
         auto n = valpop().as_into_int();
-        auto val = valpop();
+        auto & val = valback();
         auto a = val.as_array_ptr_thru_ref();
-        // FIXME use valback?
         if (val.is_array())
-            valpush((*a->items()).at(n));
+            val = (*a->items()).at(n);
         else
-            valpush({make_ref(a->items(), (size_t)n)});
+            val = {make_ref(a->items(), (size_t)n)};
     
     INTERPRETER_MIDCASE(Clone)
         auto & x = valback();
@@ -1141,23 +1125,23 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(ArrayPopOut) valreq(2);
         auto n = valpop().as_into_int();
-        auto v = valpop();
+        auto & v = valback();
         Array * a = v.as_array_ptr_thru_ref();
         a->dirtify();
         auto ret = (*a->items()).at(n);
         a->items()->erase(a->items()->begin() + n);
-        valpush(ret); // FIXME use valmap
+        v = ret;
     
     INTERPRETER_MIDCASE(ArrayConcat) valreq(2);
         auto vr = valpop();
         Array * ar = vr.as_array_ptr_thru_ref();
-        auto vl = valpop();
+        auto & vl = valback();
         Array * al = vl.as_array_ptr_thru_ref();
         auto newarray = make_array(make_array_data());
         
         newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
         newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
-        valpush(newarray); // FIXME use valmap
+        vl = newarray;
     
     INTERPRETER_MIDCASE(StringLiteral)
         valpush(make_array(make_array_data(s.programdata.get_token_stringval(n))));
@@ -1175,9 +1159,11 @@ int interpreter_core(const Program & programdata, int i)
     INTERPRETER_MIDCASE(PuntN)
         if (s.evalstacks.size() == 0) THROWSTR("Tried to punt when only one evaluation stack was open");
         size_t count = valpop().as_into_int();
+        auto & b = s.evalstacks.back();
+        valreq(count);
         for (size_t n = 0; n < count; n++)
-            s.evalstacks.back().push_back(valpop());
-        std::reverse(s.evalstacks.back().end() - count, s.evalstacks.back().end());
+            b.push_back(std::move(*(s.evalstack.end()-1-n)));
+        s.evalstack.erase(s.evalstack.end()-count, s.evalstack.end());
     
     INTERPRETER_MIDCASE(Exit)
         INTERPRETER_DOEXIT();

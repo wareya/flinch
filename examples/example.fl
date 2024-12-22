@@ -105,5 +105,6 @@ test $test 0 @ ->
 # punting
 [ [ 1 5 punt ] ] !print
 [ [ 1 5 punt punt ] ] !print
+[ [ 5 1 2 punt_n ] ] !print
 [ [ 1 5 2 punt_n ] ] !print
 

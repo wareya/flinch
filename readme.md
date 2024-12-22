@@ -39,28 +39,29 @@ Currying with references to emulate a closure (prints 1 2 3 4 5):
 
 ```R
 inc_and_print^
-    $n$ -> # bind top of stack (which we hope is a reference) to a var
+    $n$ -> # create a new var, then bind it to the top of the stack (which we hope is a reference)
     1 n += # increment the underlying value behind the reference
     n :: !print # print it (:: clones it first)
 ^^
 
 make_fake_closure^
-    $x$
+    $x$ # new variables contain the integer 0 by default
     [ $x ^inc_and_print ]
 ^^
 
 bound_call^
-    ^^dump
+    !dump
     call
 ^^
 
-^^make_fake_closure $curried$ ->
+# .f calls a function immediately, ^f merely pushes its reference to the stack (to be later called with call)
+.make_fake_closure $curried$ ->
 
-curried ^^bound_call
-curried ^^bound_call
-curried ^^bound_call
-curried ^^bound_call
-curried ^^bound_call
+curried .bound_call
+curried .bound_call
+curried .bound_call
+curried .bound_call
+curried .bound_call
 ````
 
 ## FAQ
@@ -132,31 +133,32 @@ static inline int builtins_lookup(const string & s) { throw runtime_error("Unkno
 Using the "too simple" pi calculation benchmark (with fewer iterations than the benchmark game does):
 
 ```
+wareya@Toriaezu UCRT64 ~/dev/flinch
+$ clang++ -Wall -Wextra -pedantic main.cpp -O3 -frandom-seed=constant_seed -Wno-attributes -fuse-ld=lld -flto -mllvm -inline-threshold=10000
+
+wareya@Toriaezu UCRT64 ~/dev/flinch
 $ hyperfine "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" --warmup 3
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     206.7 ms ±   3.1 ms    [User: 204.4 ms, System: 2.9 ms]
-  Range (min … max):   202.6 ms … 211.1 ms    14 runs
+  Time (mean ± σ):     126.7 ms ±   4.3 ms    [User: 122.7 ms, System: 2.5 ms]
+  Range (min … max):   122.1 ms … 142.8 ms    22 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      77.1 ms ±   0.8 ms    [User: 73.8 ms, System: 5.7 ms]
-  Range (min … max):    76.0 ms …  79.3 ms    37 runs
+  Time (mean ± σ):      79.5 ms ±   2.0 ms    [User: 76.1 ms, System: 3.9 ms]
+  Range (min … max):    77.5 ms …  87.0 ms    36 runs
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.283 s ±  0.030 s    [User: 1.276 s, System: 0.007 s]
-  Range (min … max):    1.260 s …  1.359 s    10 runs
+  Time (mean ± σ):      1.285 s ±  0.010 s    [User: 1.278 s, System: 0.004 s]
+  Range (min … max):    1.269 s …  1.303 s    10 runs
 
 Summary
   lua etc/too_simple.lua ran
-    2.68 ± 0.05 times faster than a.exe examples/too_simple_2_shunting.fl
-   16.63 ± 0.42 times faster than python etc/too_simple.py
+    1.59 ± 0.07 times faster than a.exe examples/too_simple_2_shunting.fl
+   16.16 ± 0.42 times faster than python etc/too_simple.py
 ```
 
 Build-related info:
 
 ```
-wareya@Toriaezu UCRT64 ~/dev/flinch
-$ clang++ ^Call -Wextra -pedantic -Wno-gnu-label-as-value main.cpp -O3 -frandom-seed=constant_seed -fuse-ld=lld -Wl,--no-insert-timestamp -fno-plt -fno-stack-protector -flto
-
 wareya@Toriaezu UCRT64 ~/dev/flinch
 $ clang++ --version
 clang version 19.1.4

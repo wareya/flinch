@@ -4,7 +4,7 @@
 #include <limits.h>
 #include <string.h>
 
-#define SIZE 2000
+#define SIZE 503
 uint32_t seed = 8381853;
 
 uint32_t lcg()

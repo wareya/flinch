@@ -1,5 +1,5 @@
-SIZE = 2000
-#SIZE = 503
+#SIZE = 2000
+SIZE = 503
 #SIZE = 202
 seed = 8381853
 
@@ -33,10 +33,6 @@ def pushraw(heap, val):
         a = heap[:]
         heap[:] = val
         pushraw(heap, a)
-    elif heap[2] == []:
-        heap[2] = val
-    elif heap[3] == []:
-        heap[3] = val
     else:
         heap[4] = (heap[4]+1)&1
         pushraw(heap[2+heap[4]], val)

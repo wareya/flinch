@@ -6,7 +6,7 @@ Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`
 
 To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
 
-\*: Measured compiled with `clang++ -O2 -flto` (and various other flags), not GCC, running microbenchmarks: \~16% the runtime of python 3, and ~2.7x the runtime of lua; see "Speed"
+\*: Measured compiling with clang 19.1.14 on Windows with various advanced compiler flags; see "Speed" section
 
 ## Examples
 
@@ -130,30 +130,56 @@ static inline int builtins_lookup(const string & s) { throw runtime_error("Unkno
 
 ## Speed
 
-Using the "too simple" pi calculation benchmark (with fewer iterations than the benchmark game does):
+Note: the "too simple" pi calculation benchmark here uses fewer iterations than the benchmark game website does
 
 ```
-wareya@Toriaezu UCRT64 ~/dev/flinch
-$ clang++ -Wall -Wextra -pedantic main.cpp -O3 -frandom-seed=constant_seed -Wno-attributes -fuse-ld=lld -flto -mllvm -inline-threshold=10000
+$ clang++ -g -ggdb -Wall -Wextra -pedantic -Wno-attributes main.cpp -O3 -frandom-seed=constant_seed -fuse-ld=lld -flto -mllvm -inline-threshold=10000
 
-wareya@Toriaezu UCRT64 ~/dev/flinch
-$ hyperfine "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" --warmup 3
+$ hyperfine.exe "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" "too_simple_c.exe" --warmup 3
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     126.7 ms ±   4.3 ms    [User: 122.7 ms, System: 2.5 ms]
-  Range (min … max):   122.1 ms … 142.8 ms    22 runs
+  Time (mean ± σ):     117.0 ms ±   2.2 ms    [User: 112.0 ms, System: 8.6 ms]
+  Range (min … max):   113.8 ms … 121.5 ms    24 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      79.5 ms ±   2.0 ms    [User: 76.1 ms, System: 3.9 ms]
-  Range (min … max):    77.5 ms …  87.0 ms    36 runs
+  Time (mean ± σ):      77.8 ms ±   1.3 ms    [User: 72.9 ms, System: 4.8 ms]
+  Range (min … max):    76.3 ms …  81.3 ms    37 runs
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.285 s ±  0.010 s    [User: 1.278 s, System: 0.004 s]
-  Range (min … max):    1.269 s …  1.303 s    10 runs
+  Time (mean ± σ):      1.281 s ±  0.020 s    [User: 1.271 s, System: 0.009 s]
+  Range (min … max):    1.261 s …  1.314 s    10 runs
+
+Benchmark 4: too_simple_c.exe
+  Time (mean ± σ):      13.3 ms ±   0.8 ms    [User: 10.4 ms, System: 4.2 ms]
+  Range (min … max):    11.9 ms …  16.3 ms    164 runs
 
 Summary
-  lua etc/too_simple.lua ran
-    1.59 ± 0.07 times faster than a.exe examples/too_simple_2_shunting.fl
-   16.16 ± 0.42 times faster than python etc/too_simple.py
+  too_simple_c.exe ran
+    5.87 ± 0.37 times faster than lua etc/too_simple.lua
+    8.83 ± 0.57 times faster than a.exe examples/too_simple_2_shunting.fl
+   96.65 ± 6.09 times faster than python etc/too_simple.py
+
+$ hyperfine.exe "a.exe examples/pf.fl" "lua etc/pf.lua" "python etc/pf.py" "pf_c.exe" --warmup 3
+Benchmark 1: a.exe examples/pf.fl
+  Time (mean ± σ):     664.5 ms ±   4.4 ms    [User: 657.8 ms, System: 1.5 ms]
+  Range (min … max):   659.4 ms … 673.0 ms    10 runs
+
+Benchmark 2: lua etc/pf.lua
+  Time (mean ± σ):     341.5 ms ±   4.6 ms    [User: 323.4 ms, System: 16.7 ms]
+  Range (min … max):   335.6 ms … 350.6 ms    10 runs
+
+Benchmark 3: python etc/pf.py
+  Time (mean ± σ):     430.3 ms ±   3.9 ms    [User: 418.8 ms, System: 8.8 ms]
+  Range (min … max):   425.8 ms … 439.1 ms    10 runs
+
+Benchmark 4: pf_c.exe
+  Time (mean ± σ):      15.7 ms ±   0.4 ms    [User: 12.4 ms, System: 3.6 ms]
+  Range (min … max):    15.1 ms …  16.9 ms    156 runs
+
+Summary
+  pf_c.exe ran
+   21.72 ± 0.62 times faster than lua etc/pf.lua
+   27.37 ± 0.73 times faster than python etc/pf.py
+   42.28 ± 1.09 times faster than a.exe examples/pf.fl
 ```
 
 Build-related info:

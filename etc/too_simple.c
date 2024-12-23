@@ -7,7 +7,7 @@ int main(void)
 {
     double sum = 0.0;
     double flip = -1.0;
-    for (long i = 1; i <= 1000000000; i++) {
+    for (long i = 1; i <= 10000001; i++) {
         flip *= -1.0;
         sum += flip / (2*i - 1);
     }

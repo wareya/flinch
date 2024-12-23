@@ -98,11 +98,7 @@ struct PointerInfo {
     size_t n;
 };
 template <typename U>
-static PointerInfo * make_ptrinfo(U && items, DynamicType * addr)
-{
-    auto ret = new PointerInfo{std::forward<ArrayData>(items), addr, 1};
-    return ret;
-}
+static PointerInfo * make_ptrinfo(U && items, DynamicType * addr) { return new PointerInfo{std::forward<ArrayData>(items), addr, 1}; }
 
 struct Ref {
     PointerInfo * info;
@@ -280,10 +276,7 @@ struct Program {
     vector<TYPE> token_##NAME##s;\
     iword_t get_token_##NAME##_num(TYPE s)\
     {\
-        for (iword_t i = 0; i < token_##NAME##s.size(); i++)\
-        {\
-            if (token_##NAME##s[i] == s) return i;\
-        }\
+        for (iword_t i = 0; i < token_##NAME##s.size(); i++) { if (token_##NAME##s[i] == s) return i; }\
         token_##NAME##s.push_back(s);\
         return token_##NAME##s.size() - 1;\
     }\
@@ -383,30 +376,19 @@ Program load_program(string text)
     
     auto isint = [&](const std::string& str) {
         if (str.empty()) return false;
-        for (size_t i = (str[0] == '+' || str[0] == '-'); i < str.length(); i++)
-        {
-            if (!std::isdigit(str[i])) return false;
-        }
+        for (size_t i = (str[0] == '+' || str[0] == '-'); i < str.length(); i++) { if (!std::isdigit(str[i])) return false; }
         return true;
     };
     auto isfloat = [&](const string& str) {
         if (isint(str)) return false;
-        try
-        {
-            stod(str);
-            return true;
-        }
+        try { stod(str); return true; }
         catch (...) { }
         return false;
     };
     
     auto isname = [&](const string& str) {
-        if (str.empty() || (!isalpha(str[0]) && str[0] != '_'))
-            return false;
-        for (size_t i = 1; i < str.size(); i++)
-        {
-            if (!isalnum(str[i]) && str[i] != '_') return false;
-        }
+        if (str.empty() || (!isalpha(str[0]) && str[0] != '_')) return false;
+        for (size_t i = 1; i < str.size(); i++) { if (!isalnum(str[i]) && str[i] != '_') return false; }
         return true;
     };
     

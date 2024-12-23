@@ -53,7 +53,6 @@ const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 #define TOKEN_TABLE \
 PFX(GlobalVar),PFX(GlobalVarDec),PFX(GlobalVarLookup),PFX(GlobalVarDecLookup),\
     PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
-    PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
 PFX(Integer),PFX(IntegerInline),PFX(IntegerInlineBigDec),PFX(IntegerInlineBigBin),PFX(Double),PFX(DoubleInline),\
 PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
     PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
@@ -62,16 +61,15 @@ PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
     PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
 PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolAnd),PFX(BoolOr),\
 PFX(Assign),PFX(AsLocal),\
-PFX(Return),PFX(Call),\
-    PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
+PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
     PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
     PFX(        CmpEQ),PFX(        CmpNE),PFX(        CmpLE),PFX(        CmpGE),PFX(        CmpLT),PFX(        CmpGT),\
 PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
-PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
-PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayConcat),\
+PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(ArrayEmptyLit),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
+PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),\
 PFX(StringLiteral),PFX(StringLitReference),\
-PFX(BuiltinCall),\
-PFX(Exit)
+PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
+PFX(Call),PFX(BuiltinCall),PFX(Return),PFX(Exit)
 
 // token kind
 #define PFX(X) X
@@ -83,7 +81,7 @@ enum TKind : iword_t {
 
 //struct Token { TKind kind; iword_t n, extra_1, extra_2; };
 struct Token { iword_t kind, n, extra_1, extra_2; };
-struct Func { iword_t loc, len, name; };
+struct Func { iword_t loc, len, name, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
@@ -114,7 +112,6 @@ struct Ref {
     Ref & operator=(const Ref & r) noexcept { if (info) info->n -= 1; if (info && !info->n) delete info; info = r.info; if(info) info->n += 1; return *this; }
     Ref & operator=(Ref && r) noexcept { if (info) info->n -= 1; if (info && !info->n) delete info; info = r.info; r.info = nullptr; return *this; }
 };
-
 Ref::~Ref() { if (!info || --(info->n)) return; delete info; }
 
 #define MAKEREF return Ref{make_ptrinfo(items, &(*items).at(i))};
@@ -140,9 +137,9 @@ struct Array {
     NOINLINE Array & operator=(const Array & r) noexcept { if (info && !(--info->n)) delete info; info = r.info; if(info) info->n += 1; return *this; }
     NOINLINE Array & operator=(Array && r) noexcept { if (info && !(--info->n)) delete info; info = r.info; r.info = nullptr; return *this; }
 };
-ArrayData & Array::items() { return info->items; }
 Array::~Array() { if (!info || --(info->n)) return; delete info; }
 
+ArrayData & Array::items() { return info->items; }
 Array make_array(ArrayData backing) { return Array { make_ptrinfo(backing, 0) }; }
 
 // DynamicType can hold any of these types
@@ -430,7 +427,7 @@ Program load_program(string text)
         unordered_map<string, int> prec;
         
         #define ADD_PREC(N, X) for (auto & s : X) prec.insert({s, N});
-        ADD_PREC(6, (initializer_list<string>{ "@", "@-", "@+", "@@" }));
+        ADD_PREC(6, (initializer_list<string>{ "@", "@-", "@--", "@+", "@++", "@@" }));
         ADD_PREC(5, (initializer_list<string>{ "*", "/", "%", "<<", ">>", "&" }));
         ADD_PREC(4, (initializer_list<string>{ "+", "-", "|", "^" }));
         ADD_PREC(3, (initializer_list<string>{ "==", "<=", ">=", "!=", ">", "<" }));
@@ -497,6 +494,7 @@ Program load_program(string text)
     trivial_ops.insert({"[", ScopeOpen});
     trivial_ops.insert({"]~", ScopeClose});
     trivial_ops.insert({"]", ArrayBuild});
+    trivial_ops.insert({"[]", ArrayEmptyLit});
     
     trivial_ops.insert({"+", Add});
     trivial_ops.insert({"-", Sub});
@@ -534,6 +532,8 @@ Program load_program(string text)
     trivial_ops.insert({"@?-", ArrayLenMinusOne});
     trivial_ops.insert({"@+", ArrayPushIn});
     trivial_ops.insert({"@-", ArrayPopOut});
+    trivial_ops.insert({"@++", ArrayPushBack});
+    trivial_ops.insert({"@--", ArrayPopBack});
     trivial_ops.insert({"@@", ArrayConcat});
     
     for (i = 0; i < program_texts.size() && program_texts[i] != ""; i++)
@@ -731,26 +731,25 @@ Program load_program(string text)
             prog_erase(i + 2);
             prog_erase(i-- + 1);
         }
-        /*
         if (still_valid() && program[i].kind >= CmpEQ && program[i].kind <= CmpGT && program[i+1].kind == IfGotoLabel)
         {
             program[i].kind = TKind(IfGotoLabelEQ + (program[i].kind - CmpEQ));
             program[i].n = program[i+1].n;
             prog_erase(i-- + 1);
         }
-        */
     }
 
     //for (auto & s : program)
     //    printf("%d\n", s.kind);
     
     funcs = vector<Func>(programdata.token_funcs.size());
-    std::fill(funcs.begin(), funcs.end(), Func{0,0,0});
+    std::fill(funcs.begin(), funcs.end(), Func{0,0,0,0});
     
     vector<iword_t> root_labels(programdata.token_strings.size());
     std::fill(root_labels.begin(), root_labels.end(), (iword_t)-1);
     
     // rewrite in-function labels, register functions
+    // also compactify in-function variables
     // also rewrite root-level labels
     for (i = 0; i < program.size() && program[i].kind != Exit; i++)
     {
@@ -762,6 +761,8 @@ Program load_program(string text)
             vector<iword_t> labels(programdata.token_strings.size());
             std::fill(labels.begin(), labels.end(), (iword_t)-1);
             
+            unordered_map<iword_t, iword_t> varnames_set;
+            iword_t vn = 0;
             for (size_t i2 = i + 1; program[i2].kind != FuncEnd; i2 += 1)
             {
                 if (program[i2].kind == LabelDec)
@@ -769,12 +770,22 @@ Program load_program(string text)
                     labels[program[i2].n] = (iword_t)i2;
                     prog_erase(i2--);
                 }
+                if ((program[i2].kind == LocalVarDec || program[i2].kind == LocalVarDecLookup) && !varnames_set.count(program[i2].n))
+                    varnames_set.insert({program[i2].n, vn++});
             }
             
             // this needs to be a separate pass because labels can be seen upwards, not just downwards
             size_t i2 = i + 1;
             for (; program[i2].kind != FuncEnd; i2 += 1)
             {
+                if (program[i2].kind == LocalVarDec || program[i2].kind == LocalVarDecLookup || program[i2].kind == LocalVarLookup ||
+                    program[i2].kind == LocalVar || program[i2].kind == AsLocal ||program[i2].kind == AddAsLocal || program[i2].kind == SubAsLocal ||
+                    program[i2].kind == MulAsLocal || program[i2].kind == DivAsLocal || program[i2].kind == ModAsLocal)
+                    program[i2].n = varnames_set[program[i2].n];
+                
+                if (program[i2].kind == ForLoopLocal)
+                    program[i2].extra_1 = varnames_set[program[i2].extra_1];
+                
                 if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel ||
                     program[i2].kind == ForLoopLocal || (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
                 {
@@ -783,7 +794,7 @@ Program load_program(string text)
                         THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i2]));
                 }
             }
-            funcs[program[i].n] = Func{(iword_t)(i + 1), (iword_t)(i2 - i), program[i].n};
+            funcs[program[i].n] = Func{(iword_t)(i + 1), (iword_t)(i2 - i), program[i].n, vn};
             i = i2;
         }
         else if (program[i].kind == LabelDec)
@@ -913,12 +924,10 @@ int interpreter_core(const Program & programdata, int i)
         valpush(s.funcs[n]);
     
     INTERPRETER_MIDCASE(FuncEnd)
-        s.varstack->clear();
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
     INTERPRETER_MIDCASE(Return)
-        s.varstack->clear();
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
@@ -942,22 +951,21 @@ int interpreter_core(const Program & programdata, int i)
         valpush(Label{(int)n});
     INTERPRETER_MIDCASE(LabelDec)
         THROWSTR("internal interpreter error: tried to execute opcode that's supposed to be deleted");
+        
+    #define DO_FCALL()\
+        s.callstack.push_back(i);\
+        i = f.loc;\
+        s.varstacks.push_back(std::move(s.varstack));\
+        s.varstack = make_array_data(vector(f.varcount, DynamicType(0)));\
+        s.varstack_raw = s.varstack->data();
     
     INTERPRETER_MIDCASE(Call)
-        s.callstack.push_back(i);
         Func f = valpop().as_func();
-        i = f.loc;
-        s.varstacks.push_back(std::move(s.varstack));
-        s.varstack = make_array_data(s.vars_default);
-        s.varstack_raw = s.varstack->data();
+        DO_FCALL()
     
     INTERPRETER_MIDCASE(FuncCall)
-        s.callstack.push_back(i);
         Func f = s.funcs[n];
-        i = f.loc;
-        s.varstacks.push_back(std::move(s.varstack));
-        s.varstack = make_array_data(s.vars_default);
-        s.varstack_raw = s.varstack->data();
+        DO_FCALL()
     
     INTERPRETER_MIDCASE(Assign) valreq(2);
         Ref ref = std::move(valpop().as_ref());
@@ -990,13 +998,7 @@ int interpreter_core(const Program & programdata, int i)
             THROWSTR("Tried to use for loop with non-integer");
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num) i = dest.loc;
-        /*
-        if ((*s.varstack)[0].is_array())
-        {
-            printf("%zd %zd\n", s.evalstack.size(), s.callstack.size());
-            printf("%zd?!?!\n", (*s.varstack)[0].as_array().items()->size());
-        }
-        */
+        
     INTERPRETER_MIDCASE(ForLoopLabel) valreq(2);
         auto num = valpop();
         auto ref = std::move(valpop().as_ref());
@@ -1004,13 +1006,7 @@ int interpreter_core(const Program & programdata, int i)
             THROWSTR("Tried to use for loop with non-integer");
         *ref.ref() = *ref.ref() + 1;
         if (*ref.ref() < num) i = n;
-        /*
-        if ((*s.varstack)[0].is_array())
-        {
-            printf("%zd %zd\n", s.evalstack.size(), s.callstack.size());
-            printf("%zd?!?!\n", (*s.varstack)[0].as_array().items()->size());
-        }
-        */
+        
     INTERPRETER_MIDCASE(ForLoopLocal)
         // FIXME: add a global version
         auto & _v = s.varstack_raw[program[i-1].extra_1];
@@ -1019,13 +1015,6 @@ int interpreter_core(const Program & programdata, int i)
         auto & v = _v.as_int();
         int64_t num = (iwordsigned_t)program[i-1].extra_2;
         if (++v < num) i = n;
-        /*
-        if ((*s.varstack)[0].is_array())
-        {
-            printf("%zd %zd\n", s.evalstack.size(), s.callstack.size());
-            printf("%zd?!?!\n", (*s.varstack)[0].as_array().items()->size());
-        }
-        */
     
     // INTERPRETER_MIDCASE_GOTOLABELCMP
     #define IMGLC(X, OP) \
@@ -1113,14 +1102,15 @@ int interpreter_core(const Program & programdata, int i)
         s.evalstack = vec_pop_back(s.evalstacks);
         valpush(make_array(make_array_data(std::move(back))));
     
+    INTERPRETER_MIDCASE(ArrayEmptyLit)
+        valpush(make_array(make_array_data()));
+    
     INTERPRETER_MIDCASE(ArrayIndex) valreq(2);
         auto n = valpop().as_into_int();
         auto & val = valback();
         auto a = val.as_array_ptr_thru_ref();
-        if (val.is_array())
-            val = (*a->items()).at(n);
-        else
-            val = make_ref(a->items(), (size_t)n);
+        if (val.is_array()) val = (*a->items()).at(n);
+        else val = make_ref(a->items(), (size_t)n);
     
     INTERPRETER_MIDCASE(Clone)
         auto x = valpop();
@@ -1156,6 +1146,19 @@ int interpreter_core(const Program & programdata, int i)
         a->items()->erase(a->items()->begin() + n);
         v = std::move(ret);
     
+    INTERPRETER_MIDCASE(ArrayPushBack) valreq(2);
+        auto inval = valpop();
+        auto v = valpop();
+        Array * a = v.as_array_ptr_thru_ref();
+        a->dirtify();
+        a->items()->push_back(inval);
+    
+    INTERPRETER_MIDCASE(ArrayPopBack)
+        auto & v = valback();
+        Array * a = v.as_array_ptr_thru_ref();
+        a->dirtify();
+        v = vec_pop_back(*a->items());
+    
     INTERPRETER_MIDCASE(ArrayConcat) valreq(2);
         auto vr = valpop();
         Array * ar = vr.as_array_ptr_thru_ref();
@@ -1185,8 +1188,7 @@ int interpreter_core(const Program & programdata, int i)
         size_t count = valpop().as_into_int();
         auto & b = s.evalstacks.back();
         valreq(count);
-        for (size_t n = 0; n < count; n++)
-            b.push_back(std::move(*(s.evalstack.end()-1-n)));
+        for (size_t n = 0; n < count; n++) b.push_back(std::move(*(s.evalstack.end()-1-n)));
         s.evalstack.erase(s.evalstack.end()-count, s.evalstack.end());
     
     INTERPRETER_MIDCASE(Exit)

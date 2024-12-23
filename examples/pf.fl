@@ -1,9 +1,5 @@
-heap$
-aaaa^
-    heap$
-^^
-( 2000 -> $size$ )
-#( 503 -> $size$ )
+#( 2000 -> $size$ )
+( 503 -> $size$ )
 #( 202 -> $size$ )
 ( 8381853 -> $seed$ )
 
@@ -20,7 +16,12 @@ generate_grid^
     
     ( -1 -> $i$ )
     :loopend goto loopstart:
-        grid i ( .lcg > 1477603712 ) @+
+        grid i (
+        ((
+            ( ( ( seed + 1 ) * 141853155 ) & 0xFFFFFFFF -> $seed )
+            seed
+        ))
+         > 1477603712 ) @+
     loopend: $i size2 :loopstart inc_goto_until
     
     ( 1 -> $grid @ ( size * 2 - 2 ) )
@@ -34,15 +35,6 @@ generate_grid^
     loopend2: $n size :loopstart2 inc_goto_until
     
     grid
-^^
-
-get_neighbors^
-    $size$ ->
-    $index$ ->
-    [ ( index - 1 )
-      ( index + 1 )
-      ( index - size )
-      ( index + size ) ]
 ^^
 
 pushraw^
@@ -64,8 +56,7 @@ pushraw^
 
 push^
     $val$ ->
-    $heap$ ->
-    heap [ ( val @ 0 ) ( val @ 1 ) [ ] [ ] 0 ] .pushraw
+    [ ( val @ 0 ) ( val @ 1 ) [ ] [ ] 0 ] .pushraw
 ^^
 
 pop^
@@ -111,13 +102,15 @@ dijkstra^
         nonret:
 
         ( current_distance > distances @ current_index ) :loop2 if_goto
-
-        current_index size .get_neighbors $neighbors$ ->
         
         ( current_distance + 1 -> $new_dist$ )
         ( -1 -> $i )
+        ( current_index - 1 )
+        ( current_index + 1 )
+        ( current_index - size )
+        ( current_index + size )
         :loopend2 goto loopstart2:
-            ( neighbors @ i -> $neighbor$ )
+            $neighbor$ ->
             ( ( grid @ neighbor ) == 0 ) :loopend2 if_goto
             ( new_dist >= distances @ neighbor ) :loopend2 if_goto
             

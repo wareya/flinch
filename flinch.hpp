@@ -90,43 +90,41 @@ struct DynamicType;
 
 typedef shared_ptr<vector<DynamicType>> ArrayData;
 
-struct GCableInfo {
+struct PointerInfo {
     ArrayData items;
     DynamicType * refdata;
     size_t n;
 };
-std::unordered_set<GCableInfo *> g_gcinfo_young;
 template <typename U>
-static GCableInfo * make_gcableinfo(U && items, DynamicType * addr)
+static PointerInfo * make_ptrinfo(U && items, DynamicType * addr)
 {
-    auto ret = new GCableInfo{std::forward<ArrayData>(items), addr, 1};
-    g_gcinfo_young.insert(ret);
+    auto ret = new PointerInfo{std::forward<ArrayData>(items), addr, 1};
     return ret;
 }
 
 struct Ref {
-    GCableInfo * info;
+    PointerInfo * info;
     DynamicType * ref() { return info->refdata; }
     
     ~Ref();
     
-    Ref(GCableInfo * r) noexcept : info(r) { }
+    Ref(PointerInfo * r) noexcept : info(r) { }
     Ref(const Ref & r) noexcept { info = r.info; if(info) info->n += 1; }
     Ref(Ref && r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Ref & operator=(const Ref & r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; if(info) info->n += 1; return *this; }
-    Ref & operator=(Ref && r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; r.info = nullptr; return *this; }
+    Ref & operator=(const Ref & r) noexcept { if (info) info->n -= 1; if (info && !info->n) delete info; info = r.info; if(info) info->n += 1; return *this; }
+    Ref & operator=(Ref && r) noexcept { if (info) info->n -= 1; if (info && !info->n) delete info; info = r.info; r.info = nullptr; return *this; }
 };
 
-Ref::~Ref() { if (!info || --(info->n)) return; { delete info; g_gcinfo_young.erase(info); } }
+Ref::~Ref() { if (!info || --(info->n)) return; delete info; }
 
-#define MAKEREF return Ref{make_gcableinfo(items, &(*items).at(i))};
+#define MAKEREF return Ref{make_ptrinfo(items, &(*items).at(i))};
 
 ArrayData make_array_data(vector<DynamicType> x) { return make_shared<vector<DynamicType>>(x); }
 ArrayData make_array_data() { return make_shared<vector<DynamicType>>(); }
 
 struct Label { int loc; };
 struct Array {
-    GCableInfo * info;
+    PointerInfo * info;
     ArrayData & items();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
@@ -136,16 +134,16 @@ struct Array {
     
     ~Array();
     
-    Array(GCableInfo * r) noexcept : info(r) { }
+    Array(PointerInfo * r) noexcept : info(r) { }
     Array(const Array & r) noexcept { info = r.info; if(info) info->n += 1; }
     Array(Array && r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Array & operator=(const Array & r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; if(info) info->n += 1; return *this; }
-    Array & operator=(Array && r) noexcept { if (info) info->n -= 1; if (info && !info->n) { delete info; g_gcinfo_young.erase(info); } info = r.info; r.info = nullptr; return *this; }
+    NOINLINE Array & operator=(const Array & r) noexcept { if (info && !(--info->n)) delete info; info = r.info; if(info) info->n += 1; return *this; }
+    NOINLINE Array & operator=(Array && r) noexcept { if (info && !(--info->n)) delete info; info = r.info; r.info = nullptr; return *this; }
 };
 ArrayData & Array::items() { return info->items; }
-Array::~Array() { if (!info || --(info->n)) return; { delete info; g_gcinfo_young.erase(info); } }
+Array::~Array() { if (!info || --(info->n)) return; delete info; }
 
-NOINLINE Array make_array(ArrayData backing) { return Array { make_gcableinfo(backing, 0) }; }
+Array make_array(ArrayData backing) { return Array { make_ptrinfo(backing, 0) }; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -267,8 +265,7 @@ NOINLINE void Array::dirtify()
     {
         auto old = info->items;
         info->items = make_array_data(*info->items.get());
-        for (auto & x : *old)
-            x = 0;
+        for (auto & x : *old) x = 0;
     }
 }
 //NOINLINE void Array::dirtify() { }
@@ -494,7 +491,6 @@ Program load_program(string text)
     trivial_ops.insert({"inc_goto_until", ForLoop});
     trivial_ops.insert({"punt", Punt});
     trivial_ops.insert({"punt_n", PuntN});
-    trivial_ops.insert({"do_cycle_collection", PuntN});
     
     trivial_ops.insert({"->", Assign});
     
@@ -829,97 +825,6 @@ struct ProgramState {
     
     vector<vector<DynamicType>> evalstacks;
     vector<DynamicType> evalstack;
-    
-    void gc_trace_Array(Array & data)
-    {
-        gc_trace_GCableInfo(data.info);
-    }
-    void gc_trace_Ref(Ref & data)
-    {
-        gc_trace_GCableInfo(data.info);
-    }
-    void gc_trace_DynamicType(DynamicType & data)
-    {
-        if (data.is_array())
-            gc_trace_Array(data.as_array());
-        else if (data.is_ref())
-            gc_trace_Ref(data.as_ref());
-    }
-    void gc_trace_ArrayData(ArrayData & data)
-    {
-        for (auto & x : *data)
-            gc_trace_DynamicType(x);
-    }
-    
-    void gc_trace_GCableInfo(GCableInfo * info)
-    {
-        if (info && (info->n & 0x8000000000000000))
-        {
-            info->n ^= 0x8000000000000000;
-            if (info->items) gc_trace_ArrayData(info->items);
-        }
-    }
-    size_t gc_prevsize = 0;
-    NOINLINE void do_gc(unordered_set<GCableInfo *> & gcinfo)
-    {
-        for (auto & x : gcinfo)
-            x->n |= 0x8000000000000000;
-        
-        gc_trace_ArrayData(globals);
-        
-        gc_trace_ArrayData(varstack);
-        for (auto & x : varstacks)
-            gc_trace_ArrayData(x);
-        
-        for (auto & x : evalstack)
-            gc_trace_DynamicType(x);
-        for (auto & y : evalstacks)
-        {
-            for (auto & x : y)
-                gc_trace_DynamicType(x);
-        }
-        
-        unordered_set<GCableInfo *> garbage;
-        for (auto & x : gcinfo)
-        {
-            if (x->n & 0x8000000000000000)
-                garbage.insert(x);
-        }
-        for (auto & x : garbage)
-            x->items = 0;
-        
-        unordered_set<GCableInfo *> not_garbage;
-        for (auto & x : gcinfo)
-        {
-            if (x->n & 0x8000000000000000)
-                delete x;
-            else
-                not_garbage.insert(x);
-        }
-        g_gcinfo_young = not_garbage;
-        
-        gc_prevsize = gcinfo.size();
-    }
-    size_t young_collections = 0;
-    void do_gc()
-    {
-        if (g_gcinfo_young.size() == 0)
-            return;
-        
-        size_t l = 256;
-        size_t d = 32;
-        if ((g_gcinfo_young.size() + l) < (gc_prevsize + l) * d && (g_gcinfo_young.size() + l) > (gc_prevsize + l) / d)
-            return;
-        
-        do_gc(g_gcinfo_young);
-    }
-    
-    ~ProgramState()
-    {
-        for (auto & x : g_gcinfo_young)
-            delete x;
-        g_gcinfo_young.clear();
-    }
 };
 
 #if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
@@ -1210,12 +1115,12 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(ArrayIndex) valreq(2);
         auto n = valpop().as_into_int();
-        auto val = valpop();
+        auto & val = valback();
         auto a = val.as_array_ptr_thru_ref();
         if (val.is_array())
-            valpush((*a->items()).at(n));
+            val = (*a->items()).at(n);
         else
-            valpush(make_ref(a->items(), (size_t)n));
+            val = make_ref(a->items(), (size_t)n);
     
     INTERPRETER_MIDCASE(Clone)
         auto x = valpop();

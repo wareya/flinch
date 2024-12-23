@@ -39,19 +39,21 @@ function table.shallow_copy(t)
     end
     return t2
 end
+function assign_array(dst, src)
+    
+end
 
 function pushraw(heap, val)
-    if #(heap[1]) == 0 then
-        heap[1] = val
-    elseif heap[1][1] > val[1] then
-        local a = heap[1]
-        heap[1] = val
-        pushraw(heap, a)
+    if val == nil or #val == 0 then
+        oops_no_val()
+    elseif #heap == 0 then
+        for i = 1, 5 do heap[i] = val[i] end
+    elseif heap[1] > val[1] then
+        for i = 1, 5 do val[i], heap[i] = heap[i], val[i] end
+        pushraw(heap, val)
     else
-        heap[1][5] = (heap[1][5] + 1) % 2
-        local n = {heap[1][3 + heap[1][5]]}
-        pushraw(n, val)
-        heap[1][3 + heap[1][5]] = n[1]
+        heap[5] = (heap[5] + 1) % 2
+        pushraw(heap[3 + heap[5]], val)
     end
 end
 
@@ -60,14 +62,14 @@ function push(heap, val)
 end
 
 function pop(heap)
-    local top = heap[1]
-    if #{heap[1][4]} > 0 then
-        local n = {heap[1][3]}
-        pushraw(n, heap[1][4])
-        heap[1][3] = n[1]
+    local r1 = heap[1]
+    local r2 = heap[2]
+    if #(heap[4]) > 0 then
+        pushraw(heap[3], heap[4])
     end
-    heap[1] = heap[1][3]
-    return top[1], top[2]
+    local h = heap[3]
+    for i = 1, 5 do heap[i] = h[i] end
+    return r1, r2
 end
 
 function dijkstra(grid, size)
@@ -80,10 +82,10 @@ function dijkstra(grid, size)
     end
     distances[start] = 0
 
-    local heap = {{}}
+    local heap = {}
     push(heap, {0, start})
 
-    while #(heap[1]) > 0 do
+    while #heap > 0 do
         local current_distance, current_index = pop(heap)
 
         if current_index == end_ then

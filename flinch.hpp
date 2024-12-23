@@ -55,25 +55,24 @@ typedef  int32_t iwordsigned_t;
 const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 
 #define TOKEN_TABLE \
-PFX(GlobalVar),PFX(GlobalVarDec),PFX(GlobalVarLookup),PFX(GlobalVarDecLookup),\
-    PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),\
+PFX(Exit),PFX(GlobalVar),PFX(GlobalVarDec),PFX(GlobalVarLookup),PFX(GlobalVarDecLookup),\
+    PFX(LocalVar),PFX(LocalVarDec),PFX(LocalVarLookup),PFX(LocalVarDecLookup),PFX(Assign),PFX(AsLocal),\
 PFX(Integer),PFX(IntegerInline),PFX(IntegerInlineBigDec),PFX(IntegerInlineBigBin),PFX(Double),PFX(DoubleInline),\
 PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
     PFX(AddAssign),PFX(SubAssign),PFX(MulAssign),PFX(DivAssign),PFX(ModAssign),\
     PFX(AddAsLocal),PFX(SubAsLocal),PFX(MulAsLocal),PFX(DivAsLocal),PFX(ModAsLocal),\
     PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
     PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
-PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolAnd),PFX(BoolOr),\
-PFX(Assign),PFX(AsLocal),\
-PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
-    PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
-    PFX(        CmpEQ),PFX(        CmpNE),PFX(        CmpLE),PFX(        CmpGE),PFX(        CmpLT),PFX(        CmpGT),\
-PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
+PFX(Neg),PFX(BitNot),PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolNot),PFX(BoolAnd),PFX(BoolOr),\
 PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(ArrayEmptyLit),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
 PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),\
 PFX(StringLiteral),PFX(StringLitReference),\
 PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
-PFX(Call),PFX(BuiltinCall),PFX(Return),PFX(Exit)
+PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
+    PFX(IfGotoLabelEQ),PFX(IfGotoLabelNE),PFX(IfGotoLabelLE),PFX(IfGotoLabelGE),PFX(IfGotoLabelLT),PFX(IfGotoLabelGT),\
+    PFX(        CmpEQ),PFX(        CmpNE),PFX(        CmpLE),PFX(        CmpGE),PFX(        CmpLT),PFX(        CmpGT),\
+PFX(ForLoop),PFX(ForLoopLabel),PFX(ForLoopLocal),\
+PFX(Call),PFX(BuiltinCall),PFX(Return)
 
 // token kind
 #define PFX(X) X
@@ -81,6 +80,10 @@ enum TKind : iword_t {
     TOKEN_TABLE,
     HandlerCount
 };
+#undef PFX
+
+#define PFX(X) { (X) , (#X) }
+unordered_map<TKind, const char *> tnames = { TOKEN_TABLE };
 #undef PFX
 
 //struct Token { TKind kind; iword_t n, extra_1, extra_2; };
@@ -97,50 +100,65 @@ struct PointerInfo {
     DynamicType * refdata;
     size_t n;
 };
-template <typename U>
-static PointerInfo * make_ptrinfo(U && items, DynamicType * addr) { return new PointerInfo{std::forward<ArrayData>(items), addr, 1}; }
+
+struct PointerInfoPtr {
+    PointerInfo * p;
+    
+    // hold on to a few control blocks, because rapidly allocating and freeing them is expensive on some OSs like windows
+    static PointerInfo * freed_pointers[64];
+    static size_t freed_pointers_n;
+
+    PointerInfoPtr(ArrayData & items, DynamicType * addr)
+    {
+        if (freed_pointers_n)
+        {
+            p = freed_pointers[--freed_pointers_n];
+            *p = {items, addr, 1};
+        }
+        else p = new PointerInfo{items, addr, 1};
+    }
+    void rdec()
+    {
+        if (!p || --(p->n)) return;
+        if (freed_pointers_n >= sizeof(freed_pointers)/sizeof(freed_pointers[0])) { delete p; p = nullptr; return; }
+        p->items = 0;
+        freed_pointers[freed_pointers_n++] = p;
+    }
+    ~PointerInfoPtr() { rdec(); }
+    PointerInfoPtr(const PointerInfoPtr & r) noexcept { p = r.p; if(p) p->n += 1; }
+    PointerInfoPtr(PointerInfoPtr && r)      noexcept { p = r.p; r.p = nullptr; }
+    PointerInfoPtr & operator=(const PointerInfoPtr & r) noexcept { rdec(); p = r.p; if(p) p->n += 1; return *this; }
+    PointerInfoPtr & operator=(PointerInfoPtr && r)      noexcept { rdec(); p = r.p; r.p = nullptr; return *this; }
+};
+PointerInfo * PointerInfoPtr::freed_pointers[] = {};
+size_t PointerInfoPtr::freed_pointers_n = 0;
 
 struct Ref {
-    PointerInfo * info;
-    DynamicType * ref() { return info->refdata; }
-    
-    ~Ref();
-    
-    Ref(PointerInfo * r) noexcept : info(r) { }
-    Ref(const Ref & r) noexcept { info = r.info; if(info) info->n += 1; }
-    Ref(Ref && r) noexcept { info = r.info; r.info = nullptr; }
-    Ref & operator=(const Ref & r) noexcept { if (info) info->n -= 1; if (info && !info->n) delete info; info = r.info; if(info) info->n += 1; return *this; }
-    Ref & operator=(Ref && r) noexcept { if (info) info->n -= 1; if (info && !info->n) delete info; info = r.info; r.info = nullptr; return *this; }
+    PointerInfoPtr info;
+    DynamicType * ref() { return info.p->refdata; }
+    Ref(PointerInfoPtr r) noexcept : info(r) { }
 };
-Ref::~Ref() { if (!info || --(info->n)) return; delete info; }
 
-#define MAKEREF return Ref{make_ptrinfo(items, &(*items).at(i))};
+#define MAKEREF return Ref{PointerInfoPtr(items, &items.get()->at(i))};
+#define MAKEREF2 return Ref{PointerInfoPtr(items, items.get()->data() + i)};
 
 ArrayData make_array_data(vector<DynamicType> x) { return make_shared<vector<DynamicType>>(x); }
 ArrayData make_array_data() { return make_shared<vector<DynamicType>>(); }
 
 struct Label { int loc; };
 struct Array {
-    PointerInfo * info;
+    PointerInfoPtr info;
     ArrayData & items();
     // dirtify is called whenever doing anything that might resize the array
     // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
     // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
     // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
     void dirtify();
-    
-    ~Array();
-    
-    Array(PointerInfo * r) noexcept : info(r) { }
-    Array(const Array & r) noexcept { info = r.info; if(info) info->n += 1; }
-    Array(Array && r) noexcept { info = r.info; r.info = nullptr; }
-    NOINLINE Array & operator=(const Array & r) noexcept { if (info && !(--info->n)) delete info; info = r.info; if(info) info->n += 1; return *this; }
-    NOINLINE Array & operator=(Array && r) noexcept { if (info && !(--info->n)) delete info; info = r.info; r.info = nullptr; return *this; }
+    Array(PointerInfoPtr r) noexcept : info(r) { }
 };
-Array::~Array() { if (!info || --(info->n)) return; delete info; }
 
-ArrayData & Array::items() { return info->items; }
-Array make_array(ArrayData backing) { return Array { make_ptrinfo(backing, 0) }; }
+ArrayData & Array::items() { return info.p->items; }
+Array make_array(ArrayData backing) { return Array { PointerInfoPtr(backing, 0) }; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -200,6 +218,17 @@ struct DynamicType {
     bool operator&&(const DynamicType& other) const { INFIX(!!, !!, &&, &&, ) }
     bool operator||(const DynamicType& other) const { INFIX(!!, !!, ||, ||, ) }
     
+    #define UNARY(WRAPPER, OP, WX)\
+        if (holds_alternative<int64_t>(value))\
+            return WRAPPER(OP WX(std::get<int64_t>(value)));\
+        else if (holds_alternative<double>(value))\
+            return WRAPPER(OP WX(std::get<double>(value)));\
+        else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP);
+    
+    DynamicType operator-() const { UNARY(int64_t, -, ) }
+    DynamicType operator!() const { UNARY(int64_t, !, ) }
+    DynamicType operator~() const { UNARY(int64_t, ~, uint64_t) }
+    
     #define AS_TYPE_X(TYPE, TYPENAME)\
     TYPE & as_##TYPENAME()\
     {\
@@ -253,15 +282,16 @@ struct DynamicType {
     }
 };
 
-inline Ref make_ref(ArrayData items, size_t i) { MAKEREF }
+inline Ref make_ref(ArrayData & items, size_t i) { MAKEREF }
+inline Ref make_ref_2(ArrayData & items, size_t i) { MAKEREF2 }
 
 //NOINLINE void Array::dirtify() { if (info && info->n != 1) info->items = make_array_data(*info->items); }
 NOINLINE void Array::dirtify()
 {
-    if (info && !info->items.unique())
+    if (info.p && !info.p->items.unique())
     {
-        auto old = info->items;
-        info->items = make_array_data(*info->items.get());
+        auto old = info.p->items;
+        info.p->items = make_array_data(*info.p->items.get());
         for (auto & x : *old) x = 0;
     }
 }
@@ -500,6 +530,10 @@ Program load_program(string text)
     trivial_ops.insert({"<<", Shl});
     trivial_ops.insert({">>", Shr});
     
+    trivial_ops.insert({"neg", Neg});
+    trivial_ops.insert({"~", BitNot});
+    trivial_ops.insert({"!", BoolNot});
+    
     trivial_ops.insert({"and", BoolAnd});
     trivial_ops.insert({"or", BoolOr});
     
@@ -725,9 +759,6 @@ Program load_program(string text)
         }
     }
 
-    //for (auto & s : program)
-    //    printf("%d\n", s.kind);
-    
     funcs = vector<Func>(programdata.token_funcs.size());
     std::fill(funcs.begin(), funcs.end(), Func{0,0,0,0});
     
@@ -804,6 +835,10 @@ Program load_program(string text)
                 THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i]));
         }
     }
+    
+    //for (auto & s : program)
+    //    printf("%s\n", tnames[(TKind)s.kind]);
+    
     return programdata;
 }
 
@@ -921,17 +956,17 @@ int interpreter_core(const Program & programdata, int i)
     INTERPRETER_MIDCASE(LocalVarDec)
         s.varstack_raw[n] = 0;
     INTERPRETER_MIDCASE(LocalVarLookup)
-        valpush(make_ref(s.varstack, n));
+        valpush(make_ref_2(s.varstack, n));
     INTERPRETER_MIDCASE(LocalVarDecLookup)
         s.varstack_raw[n] = 0;
-        valpush(make_ref(s.varstack, n));
+        valpush(make_ref_2(s.varstack, n));
     INTERPRETER_MIDCASE(GlobalVarDec)
         s.globals_raw[n] = 0;
     INTERPRETER_MIDCASE(GlobalVarLookup)
-        valpush(make_ref(s.globals, n));
+        valpush(make_ref_2(s.globals, n));
     INTERPRETER_MIDCASE(GlobalVarDecLookup)
         s.globals_raw[n] = 0;
-        valpush(make_ref(s.globals, n));
+        valpush(make_ref_2(s.globals, n));
     
     INTERPRETER_MIDCASE(LabelLookup)
         valpush(Label{(int)n});
@@ -954,13 +989,11 @@ int interpreter_core(const Program & programdata, int i)
         DO_FCALL()
     
     INTERPRETER_MIDCASE(Assign) valreq(2);
-        Ref ref = std::move(valpop().as_ref());
-        auto val = valpop();
-        *ref.ref() = val;
+        Ref ref = valpop().as_ref();
+        *ref.ref() = valpop();
     
     INTERPRETER_MIDCASE(AsLocal)
-        auto val = valpop();
-        s.varstack_raw[n] = val;
+        s.varstack_raw[n] = valpop();
     
     INTERPRETER_MIDCASE(ScopeOpen)
         s.evalstacks.push_back(std::move(s.evalstack));
@@ -970,11 +1003,9 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(IfGoto) valreq(2);
         Label dest = valpop().as_label();
-        auto val = valpop();
-        if (val) i = dest.loc;
+        if (valpop()) i = dest.loc;
     INTERPRETER_MIDCASE(IfGotoLabel)
-        auto val = valpop();
-        if (val) i = n;
+        if (valpop()) i = n;
     
     INTERPRETER_MIDCASE(ForLoop) valreq(3);
         Label dest = valpop().as_label();
@@ -1009,22 +1040,22 @@ int interpreter_core(const Program & programdata, int i)
         auto val1 = valpop();\
         if (val1 OP val2) i = n;
     
-    // INTERPRETER_MIDCASE_UNARY_SIMPLE
-    #define IMCUS(NAME, OP) \
+    // INTERPRETER_MIDCASE_BINARY_SIMPLE
+    #define IMCBS(NAME, OP) \
     INTERPRETER_MIDCASE(NAME) valreq(2);\
         auto b = valpop();\
         auto & x = valback();\
         x = x OP b;
     
-    // INTERPRETER_MIDCASE_UNARY_INTINLINE
-    #define IMCUII(NAME, OP) \
+    // INTERPRETER_MIDCASE_BINARY_INTINLINE
+    #define IMCBII(NAME, OP) \
     INTERPRETER_MIDCASE(NAME);\
         auto b = (int64_t)(iwordsigned_t)n;\
         auto & x = valback();\
         x = x OP b;
     
-    // INTERPRETER_MIDCASE_UNARY_DUBINLINE
-    #define IMCUDI(NAME, OP) \
+    // INTERPRETER_MIDCASE_BINARY_DUBINLINE
+    #define IMCBDI(NAME, OP) \
     INTERPRETER_MIDCASE(NAME)\
         uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;\
         double d;\
@@ -1032,64 +1063,57 @@ int interpreter_core(const Program & programdata, int i)
         auto & x = valback();\
         x = x OP d;
     
-    // INTERPRETER_MIDCASE_UNARY_ASSIGN
-    #define IMCUA(NAME, OP) \
+    // INTERPRETER_MIDCASE_BINARY_ASSIGN
+    #define IMCBA(NAME, OP) \
     INTERPRETER_MIDCASE(NAME) valreq(2);\
         Ref ref = std::move(valpop().as_ref());\
         auto a = valpop();\
         *ref.ref() = *ref.ref() OP a;
     
-    // INTERPRETER_MIDCASE_UNARY_ASSIGNLOC
-    #define IMCUAL(NAME, OP) \
+    // INTERPRETER_MIDCASE_BINARY_ASSIGNLOC
+    #define IMCBAL(NAME, OP) \
     INTERPRETER_MIDCASE(NAME)\
         auto a = valpop();\
         s.varstack_raw[n] = s.varstack_raw[n] OP a;
     
     IMGLC(EQ, ==) IMGLC(NE, !=) IMGLC(LE, <=) IMGLC(GE, >=) IMGLC(LT, <) IMGLC(GT, >)
-    IMCUS(Add, +) IMCUS(Sub, -) IMCUS(Mul, *) IMCUS(Div, /) IMCUS(Mod, %)
-    IMCUS(And, &) IMCUS(Or,  |) IMCUS(Xor, ^) IMCUS(BoolAnd, &&) IMCUS(BoolOr, ||)
-    IMCUS(Shl, <<) IMCUS(Shr, >>)
-    IMCUS(CmpEQ, ==) IMCUS(CmpNE, !=) IMCUS(CmpLE, <=) IMCUS(CmpGE, >=) IMCUS(CmpLT, <) IMCUS(CmpGT, >)
-    IMCUII(AddIntInline, +) IMCUII(SubIntInline, -) IMCUII(MulIntInline, *) IMCUII(DivIntInline, /) IMCUII(ModIntInline, %)
-    IMCUDI(AddDubInline, +) IMCUDI(SubDubInline, -) IMCUDI(MulDubInline, *) IMCUDI(DivDubInline, /) IMCUDI(ModDubInline, %)
-    IMCUA(AddAssign, +) IMCUA(SubAssign, -) IMCUA(MulAssign, *) IMCUA(DivAssign, /) IMCUA(ModAssign, %)
-    IMCUAL(AddAsLocal, +) IMCUAL(SubAsLocal, -) IMCUAL(MulAsLocal, *) IMCUAL(DivAsLocal, /) IMCUAL(ModAsLocal, %)
+    IMCBS(Add, +) IMCBS(Sub, -) IMCBS(Mul, *) IMCBS(Div, /) IMCBS(Mod, %)
+    IMCBS(And, &) IMCBS(Or,  |) IMCBS(Xor, ^) IMCBS(BoolAnd, &&) IMCBS(BoolOr, ||)
+    IMCBS(Shl, <<) IMCBS(Shr, >>)
+    IMCBS(CmpEQ, ==) IMCBS(CmpNE, !=) IMCBS(CmpLE, <=) IMCBS(CmpGE, >=) IMCBS(CmpLT, <) IMCBS(CmpGT, >)
+    IMCBII(AddIntInline, +) IMCBII(SubIntInline, -) IMCBII(MulIntInline, *) IMCBII(DivIntInline, /) IMCBII(ModIntInline, %)
+    IMCBDI(AddDubInline, +) IMCBDI(SubDubInline, -) IMCBDI(MulDubInline, *) IMCBDI(DivDubInline, /) IMCBDI(ModDubInline, %)
+    IMCBA(AddAssign, +) IMCBA(SubAssign, -) IMCBA(MulAssign, *) IMCBA(DivAssign, /) IMCBA(ModAssign, %)
+    IMCBAL(AddAsLocal, +) IMCBAL(SubAsLocal, -) IMCBAL(MulAsLocal, *) IMCBAL(DivAsLocal, /) IMCBAL(ModAsLocal, %)
     
-    INTERPRETER_MIDCASE(Goto)
-        i = valpop().as_label().loc;
-    INTERPRETER_MIDCASE(GotoLabel)
-        i = n;
+    // INTERPRETER_MIDCASE_UNARY
+    #define IMCU(NAME, OP) INTERPRETER_MIDCASE(NAME) valback() = OP valback();
+    IMCU(Neg, -) IMCU(BoolNot, !) IMCU(BitNot, ~)
     
-    INTERPRETER_MIDCASE(IntegerInline)
-        valpush((int64_t)(iwordsigned_t)n);
-    INTERPRETER_MIDCASE(IntegerInlineBigDec)
-        valpush(((int64_t)(iwordsigned_t)n)*10000);
-    INTERPRETER_MIDCASE(IntegerInlineBigBin)
-        valpush(((int64_t)(iwordsigned_t)n)<<15);
-    INTERPRETER_MIDCASE(Integer)
-        valpush((int64_t)s.programdata.get_token_int(n));
+    INTERPRETER_MIDCASE(Goto) i = valpop().as_label().loc;
+    INTERPRETER_MIDCASE(GotoLabel) i = n;
+    
+    INTERPRETER_MIDCASE(IntegerInline) valpush((int64_t)(iwordsigned_t)n);
+    INTERPRETER_MIDCASE(IntegerInlineBigDec) valpush(((int64_t)(iwordsigned_t)n)*10000);
+    INTERPRETER_MIDCASE(IntegerInlineBigBin) valpush(((int64_t)(iwordsigned_t)n)<<15);
+    INTERPRETER_MIDCASE(Integer) valpush((int64_t)s.programdata.get_token_int(n));
     
     INTERPRETER_MIDCASE(DoubleInline)
         uint64_t dec = ((uint64_t)n) << iword_bits_from_i64;
         double d;
         memcpy(&d, &dec, sizeof(dec));
         valpush(d);
-    INTERPRETER_MIDCASE(Double)
-        valpush(s.programdata.get_token_double(n));
-    
-    INTERPRETER_MIDCASE(LocalVar)
-        valpush(s.varstack_raw[n]);
-    
-    INTERPRETER_MIDCASE(GlobalVar)
-        valpush(s.globals_raw[n]);
+        
+    INTERPRETER_MIDCASE(Double) valpush(s.programdata.get_token_double(n));
+    INTERPRETER_MIDCASE(LocalVar) valpush(s.varstack_raw[n]);
+    INTERPRETER_MIDCASE(GlobalVar) valpush(s.globals_raw[n]);
     
     INTERPRETER_MIDCASE(ArrayBuild)
         auto back = std::move(s.evalstack);
         s.evalstack = vec_pop_back(s.evalstacks);
         valpush(make_array(make_array_data(std::move(back))));
     
-    INTERPRETER_MIDCASE(ArrayEmptyLit)
-        valpush(make_array(make_array_data()));
+    INTERPRETER_MIDCASE(ArrayEmptyLit) valpush(make_array(make_array_data()));
     
     INTERPRETER_MIDCASE(ArrayIndex) valreq(2);
         auto n = valpop().as_into_int();
@@ -1098,12 +1122,8 @@ int interpreter_core(const Program & programdata, int i)
         if (val.is_array()) val = (*a->items()).at(n);
         else val = make_ref(a->items(), (size_t)n);
     
-    INTERPRETER_MIDCASE(Clone)
-        auto x = valpop();
-        valpush(x.clone(false));
-    INTERPRETER_MIDCASE(CloneDeep)
-        auto x = valpop();
-        valpush(x.clone(true));
+    INTERPRETER_MIDCASE(Clone) valpush(valpop().clone(false));
+    INTERPRETER_MIDCASE(CloneDeep) valpush(valpop().clone(true));
     
     INTERPRETER_MIDCASE(ArrayLen)
         auto & a = valback();

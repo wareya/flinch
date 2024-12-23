@@ -1,6 +1,10 @@
 #ifndef FLINCH_INCLUDE
 #define FLINCH_INCLUDE
 
+#ifdef USE_MIMALLOC
+#include <mimalloc-new-delete.h>
+#endif
+
 #include <iostream>
 #include <fstream>
 #include <string>

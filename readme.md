@@ -1,12 +1,12 @@
 # Flinch
 
-Flinch is a fastish\* super ultra-lightweight scripting language (**under 1000 lines of code**), designed to be as easy to implement as possible while still having enough functionality to be theoretically usable for "real programming".
+Flinch is a fast\* super ultra-lightweight scripting language (**under 1000 lines of code**), designed to be as easy to implement as possible while still having enough functionality to be theoretically usable for "real programming".
 
 Flinch is stack-based and concatenative (e.g. it looks like `5 4 +`, not `5 + 4`). A consequence of this is that no parsing is needed and expressions can be evaluated by the same machinery that's responsible for control flow. Rather than using blocks and structured branches, Flinch exposes labels and direct jumps (`goto`, `if_goto`), which makes it much easier to implement.
 
 To make up for concatenative math code being hard to read, Flinch has an optional infix expression unrolling system (so things like `( 5 + 4 )` are legal Flinch code). This makes it much, much easier to write readable code, and only costs about 40 lines of space in the Flinch program loader.
 
-\*: Within 1.5x~2x the runtime of the Lua interpreter, measured compiling with clang 19.1.14 on Windows with various advanced compiler flags; see "Speed" section
+\*: Within 1.0x~1.5x the runtime of the Lua interpreter, measured compiling with clang 19.1.14 with various advanced compiler flags; see "Speed" section. On windows you're going to want to pass `-DUSE_MIMALLOC` during compilation and link in `mimalloc`, otherwise perf will be more like 1.5x~2.0x of Lua.
 
 ## Examples
 
@@ -133,53 +133,106 @@ static inline int builtins_lookup(const string & s) { throw runtime_error("Unkno
 Note: the "too simple" pi calculation benchmark here uses fewer iterations than the benchmark game website does
 
 ```
-$ clang++ -g -ggdb -Wall -Wextra -pedantic -Wno-attributes main.cpp -O3 -frandom-seed=constant_seed -fuse-ld=lld -flto -mllvm -inline-threshold=10000
+# Windows
+
+$ clang++ -g -ggdb -Wall -Wextra -pedantic -Wno-attributes -static -lmimalloc-static -DUSE_MIMALLOC main.cpp -O3 -frandom-seed=constant_seed -fuse-ld=lld -flto -mllvm -inline-threshold=10000
 
 $ hyperfine.exe "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" "too_simple_c.exe" --warmup 3
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     117.0 ms ±   2.2 ms    [User: 112.0 ms, System: 8.6 ms]
-  Range (min … max):   113.8 ms … 121.5 ms    24 runs
+  Time (mean ± σ):     117.8 ms ±   2.0 ms    [User: 116.2 ms, System: 3.9 ms]
+  Range (min … max):   115.8 ms … 124.4 ms    24 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      77.8 ms ±   1.3 ms    [User: 72.9 ms, System: 4.8 ms]
-  Range (min … max):    76.3 ms …  81.3 ms    37 runs
+  Time (mean ± σ):      81.0 ms ±   2.3 ms    [User: 76.7 ms, System: 4.3 ms]
+  Range (min … max):    78.3 ms …  89.7 ms    35 runs
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.281 s ±  0.020 s    [User: 1.271 s, System: 0.009 s]
-  Range (min … max):    1.261 s …  1.314 s    10 runs
+  Time (mean ± σ):      1.315 s ±  0.033 s    [User: 1.304 s, System: 0.005 s]
+  Range (min … max):    1.283 s …  1.394 s    10 runs
 
 Benchmark 4: too_simple_c.exe
-  Time (mean ± σ):      13.3 ms ±   0.8 ms    [User: 10.4 ms, System: 4.2 ms]
-  Range (min … max):    11.9 ms …  16.3 ms    164 runs
+  Time (mean ± σ):      14.3 ms ±   1.1 ms    [User: 11.1 ms, System: 3.4 ms]
+  Range (min … max):    12.1 ms …  16.8 ms    171 runs
 
 Summary
   too_simple_c.exe ran
-    5.87 ± 0.37 times faster than lua etc/too_simple.lua
-    8.83 ± 0.57 times faster than a.exe examples/too_simple_2_shunting.fl
-   96.65 ± 6.09 times faster than python etc/too_simple.py
+    5.66 ± 0.45 times faster than lua etc/too_simple.lua
+    8.23 ± 0.63 times faster than a.exe examples/too_simple_2_shunting.fl
+   91.93 ± 7.25 times faster than python etc/too_simple.py
 
 $ hyperfine.exe "a.exe examples/pf.fl" "lua etc/pf.lua" "python etc/pf.py" "pf_c.exe" --warmup 3
 Benchmark 1: a.exe examples/pf.fl
-  Time (mean ± σ):     664.5 ms ±   4.4 ms    [User: 657.8 ms, System: 1.5 ms]
-  Range (min … max):   659.4 ms … 673.0 ms    10 runs
+  Time (mean ± σ):     446.4 ms ±  14.4 ms    [User: 434.7 ms, System: 9.6 ms]
+  Range (min … max):   435.7 ms … 484.3 ms    10 runs
 
 Benchmark 2: lua etc/pf.lua
-  Time (mean ± σ):     341.5 ms ±   4.6 ms    [User: 323.4 ms, System: 16.7 ms]
-  Range (min … max):   335.6 ms … 350.6 ms    10 runs
+  Time (mean ± σ):     365.4 ms ±   8.2 ms    [User: 337.8 ms, System: 26.2 ms]
+  Range (min … max):   354.1 ms … 378.3 ms    10 runs
 
 Benchmark 3: python etc/pf.py
-  Time (mean ± σ):     430.3 ms ±   3.9 ms    [User: 418.8 ms, System: 8.8 ms]
-  Range (min … max):   425.8 ms … 439.1 ms    10 runs
+  Time (mean ± σ):     451.4 ms ±   6.5 ms    [User: 433.1 ms, System: 12.5 ms]
+  Range (min … max):   443.9 ms … 462.8 ms    10 runs
 
 Benchmark 4: pf_c.exe
-  Time (mean ± σ):      15.7 ms ±   0.4 ms    [User: 12.4 ms, System: 3.6 ms]
-  Range (min … max):    15.1 ms …  16.9 ms    156 runs
+  Time (mean ± σ):      17.1 ms ±   0.7 ms    [User: 13.9 ms, System: 4.4 ms]
+  Range (min … max):    15.8 ms …  19.8 ms    148 runs
 
 Summary
   pf_c.exe ran
-   21.72 ± 0.62 times faster than lua etc/pf.lua
-   27.37 ± 0.73 times faster than python etc/pf.py
-   42.28 ± 1.09 times faster than a.exe examples/pf.fl
+   21.35 ± 1.02 times faster than lua etc/pf.lua
+   26.08 ± 1.39 times faster than a.exe examples/pf.fl
+   26.38 ± 1.18 times faster than python etc/pf.py
+
+# linux
+
+$ clang++ -g -ggdb -Wall -Wextra -pedantic -Wno-attributes main.cpp -O3 -frandom-seed=constant_seed -fuse-ld=lld -flto -mllvm -inline-threshold=10000
+
+$ hyperfine "./a.out examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python3 etc/too_simple.py" "./too_simple_c.out" --warmup 3
+Benchmark 1: ./a.out examples/too_simple_2_shunting.fl
+  Time (mean ± σ):     126.0 ms ±   3.3 ms    [User: 116.5 ms, System: 0.9 ms]
+  Range (min … max):   122.8 ms … 138.5 ms    23 runs
+
+Benchmark 2: lua etc/too_simple.lua
+  Time (mean ± σ):      91.2 ms ±   3.3 ms    [User: 84.7 ms, System: 0.4 ms]
+  Range (min … max):    87.7 ms … 102.5 ms    33 runs
+
+Benchmark 3: python3 etc/too_simple.py
+  Time (mean ± σ):     533.9 ms ±  22.2 ms    [User: 497.1 ms, System: 3.4 ms]
+  Range (min … max):   514.4 ms … 593.7 ms    10 runs
+
+Benchmark 4: ./too_simple_c.out
+  Time (mean ± σ):      12.2 ms ±   0.9 ms    [User: 10.3 ms, System: 0.6 ms]
+  Range (min … max):    11.2 ms …  14.7 ms    204 runs
+
+Summary
+  ./too_simple_c.out ran
+    7.45 ± 0.60 times faster than lua etc/too_simple.lua
+   10.30 ± 0.79 times faster than ./a.out examples/too_simple_2_shunting.fl
+   43.62 ± 3.64 times faster than python3 etc/too_simple.py
+   
+$ hyperfine "./a.out examples/pf.fl" "lua etc/pf.lua" "python3 etc/pf.py" "./pf_c.out" --warmup 3
+Benchmark 1: ./a.out examples/pf.fl
+  Time (mean ± σ):     390.0 ms ±   5.0 ms    [User: 361.9 ms, System: 5.0 ms]
+  Range (min … max):   384.0 ms … 401.5 ms    10 runs
+
+Benchmark 2: lua etc/pf.lua
+  Time (mean ± σ):     327.7 ms ±   6.5 ms    [User: 306.3 ms, System: 2.3 ms]
+  Range (min … max):   320.4 ms … 340.4 ms    10 runs
+
+Benchmark 3: python3 etc/pf.py
+  Time (mean ± σ):     294.9 ms ±   8.4 ms    [User: 266.2 ms, System: 7.8 ms]
+  Range (min … max):   286.5 ms … 312.8 ms    10 runs
+
+Benchmark 4: ./pf_c.out
+  Time (mean ± σ):      11.7 ms ±   0.5 ms    [User: 9.6 ms, System: 0.8 ms]
+  Range (min … max):    10.7 ms …  13.5 ms    246 runs
+
+Summary
+  ./pf_c.out ran
+   25.27 ± 1.37 times faster than python3 etc/pf.py
+   28.08 ± 1.41 times faster than lua etc/pf.lua
+   33.42 ± 1.61 times faster than ./a.out examples/pf.fl
+
 ```
 
 Build-related info:

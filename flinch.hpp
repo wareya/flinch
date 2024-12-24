@@ -88,7 +88,7 @@ unordered_map<TKind, const char *> tnames = { TOKEN_TABLE };
 
 //struct Token { TKind kind; iword_t n, extra_1, extra_2; };
 struct Token { iword_t kind, n, extra_1, extra_2; };
-struct Func { iword_t loc, len, name, varcount; };
+struct Func { iword_t loc; uint16_t len, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
@@ -760,7 +760,7 @@ Program load_program(string text)
     }
 
     funcs = vector<Func>(programdata.token_funcs.size());
-    std::fill(funcs.begin(), funcs.end(), Func{0,0,0,0});
+    std::fill(funcs.begin(), funcs.end(), Func{0,0,0});
     
     vector<iword_t> root_labels(programdata.token_strings.size());
     std::fill(root_labels.begin(), root_labels.end(), (iword_t)-1);
@@ -772,7 +772,7 @@ Program load_program(string text)
     {
         if (program[i].kind == FuncDec)
         {
-            if (funcs[program[i].n].name != 0)
+            if (funcs[program[i].n].len != 0)
                 THROWSTR("Redefined function on or near line " + std::to_string(lines[i]));
             
             vector<iword_t> labels(programdata.token_strings.size());
@@ -811,7 +811,9 @@ Program load_program(string text)
                         THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i2]));
                 }
             }
-            funcs[program[i].n] = Func{(iword_t)(i + 1), (iword_t)(i2 - i), program[i].n, vn};
+            if (i2 - i >= 65536) THROWSTR("Single functions cannot be more than ~65k operations long");
+            if (vn >= 65536)     THROWSTR("Single functions cannot contain more than ~65k operations variables");
+            funcs[program[i].n] = Func{(iword_t)(i + 1), (uint16_t)(i2 - i), (uint16_t)vn};
             i = i2;
         }
         else if (program[i].kind == LabelDec)
@@ -1212,6 +1214,16 @@ const HandlerInfo handler = { TOKEN_TABLE };
 
 int interpret(const Program & programdata)
 {
+    //if (0)
+    //{
+    //    unsigned char asdf[sizeof(DynamicType)];
+    //    DynamicType x = (int64_t)0;
+    //    memcpy(asdf, &x, sizeof(DynamicType));
+    //    for (size_t i = 0; i < sizeof(DynamicType); i++)
+    //        printf("%02X ", asdf[i]);
+    //    puts("");
+    //    puts("");
+    //}
     interpreter_core(programdata, 0);
     return 0;
 }

@@ -88,7 +88,8 @@ unordered_map<TKind, const char *> tnames = { TOKEN_TABLE };
 
 //struct Token { TKind kind; iword_t n, extra_1, extra_2; };
 struct Token { iword_t kind, n, extra_1, extra_2; };
-struct Func { iword_t loc; uint16_t len, varcount; };
+struct CompFunc { iword_t loc, len, varcount; };
+struct Func { iword_t loc, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
@@ -300,7 +301,7 @@ NOINLINE void Array::dirtify()
 struct Program {
     vector<Token> program;
     vector<int> lines;
-    vector<Func> funcs;
+    vector<CompFunc> funcs;
     
     #define TOKEN_LOG(NAME, TYPE)\
     vector<TYPE> token_##NAME##s;\
@@ -759,8 +760,8 @@ Program load_program(string text)
         }
     }
 
-    funcs = vector<Func>(programdata.token_funcs.size());
-    std::fill(funcs.begin(), funcs.end(), Func{0,0,0});
+    funcs = vector<CompFunc>(programdata.token_funcs.size());
+    std::fill(funcs.begin(), funcs.end(), CompFunc{0,0,0});
     
     vector<iword_t> root_labels(programdata.token_strings.size());
     std::fill(root_labels.begin(), root_labels.end(), (iword_t)-1);
@@ -811,9 +812,10 @@ Program load_program(string text)
                         THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i2]));
                 }
             }
-            if (i2 - i >= 65536) THROWSTR("Single functions cannot be more than ~65k operations long");
-            if (vn >= 65536)     THROWSTR("Single functions cannot contain more than ~65k operations variables");
-            funcs[program[i].n] = Func{(iword_t)(i + 1), (uint16_t)(i2 - i), (uint16_t)vn};
+            if (i2 - i >= (size_t)iword_t(-1)) THROWSTR("Single functions contains far too many operations");
+            if (vn >= (size_t)iword_t(-1))     THROWSTR("Single functions contains far too many variables");
+            funcs[program[i].n] = CompFunc{(iword_t)(i + 1), (iword_t)(i2 - i), (iword_t)vn};
+            
             i = i2;
         }
         else if (program[i].kind == LabelDec)
@@ -846,7 +848,7 @@ Program load_program(string text)
 
 struct ProgramState {
     const Program & programdata;
-    const vector<Func> & funcs;
+    const vector<CompFunc> & funcs;
     vector<DynamicType> vars_default;
     vector<iword_t> callstack;
     
@@ -872,8 +874,7 @@ int interpreter_core(const Program & programdata, int i)
     auto program = programdata.program.data();
     
     vector<DynamicType> vars_default;
-    for (size_t i = 0; i < programdata.token_varnames.size(); i++)
-        vars_default.push_back(0);
+    for (size_t i = 0; i < programdata.token_varnames.size(); i++) vars_default.push_back(0);
     
     auto s = ProgramState {
         programdata, programdata.funcs, vars_default, {},
@@ -944,7 +945,7 @@ int interpreter_core(const Program & programdata, int i)
         i += s.funcs[n].len;
     
     INTERPRETER_MIDCASE(FuncLookup)
-        valpush(s.funcs[n]);
+        valpush((Func{s.funcs[n].loc, s.funcs[n].varcount}));
     
     INTERPRETER_MIDCASE(FuncEnd)
         s.varstack = vec_pop_back(s.varstacks);
@@ -987,7 +988,7 @@ int interpreter_core(const Program & programdata, int i)
         DO_FCALL()
     
     INTERPRETER_MIDCASE(FuncCall)
-        Func f = s.funcs[n];
+        Func f = {s.funcs[program[i-1].n].loc, s.funcs[program[i-1].n].varcount};
         DO_FCALL()
     
     INTERPRETER_MIDCASE(Assign) valreq(2);
@@ -1214,16 +1215,6 @@ const HandlerInfo handler = { TOKEN_TABLE };
 
 int interpret(const Program & programdata)
 {
-    //if (0)
-    //{
-    //    unsigned char asdf[sizeof(DynamicType)];
-    //    DynamicType x = (int64_t)0;
-    //    memcpy(asdf, &x, sizeof(DynamicType));
-    //    for (size_t i = 0; i < sizeof(DynamicType); i++)
-    //        printf("%02X ", asdf[i]);
-    //    puts("");
-    //    puts("");
-    //}
     interpreter_core(programdata, 0);
     return 0;
 }

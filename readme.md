@@ -139,49 +139,49 @@ $ clang++ -g -ggdb -Wall -Wextra -pedantic -Wno-attributes -DUSE_MIMALLOC -stati
 
 $ hyperfine.exe "a.exe examples/pf.fl" "lua etc/pf.lua" "python etc/pf.py" "pf_c.exe" --warmup 3
 Benchmark 1: a.exe examples/pf.fl
-  Time (mean ± σ):     304.3 ms ±   7.3 ms    [User: 297.8 ms, System: 5.9 ms]
-  Range (min … max):   295.4 ms … 322.7 ms    10 runs
+  Time (mean ± σ):     309.9 ms ±   5.2 ms    [User: 304.4 ms, System: 7.2 ms]
+  Range (min … max):   304.5 ms … 320.9 ms    10 runs
 
 Benchmark 2: lua etc/pf.lua
-  Time (mean ± σ):     313.9 ms ±   5.4 ms    [User: 296.3 ms, System: 16.2 ms]
-  Range (min … max):   308.0 ms … 323.1 ms    10 runs
+  Time (mean ± σ):     314.6 ms ±   4.9 ms    [User: 293.4 ms, System: 22.0 ms]
+  Range (min … max):   307.3 ms … 324.1 ms    10 runs
 
 Benchmark 3: python etc/pf.py
-  Time (mean ± σ):     435.3 ms ±  12.3 ms    [User: 427.5 ms, System: 8.7 ms]
-  Range (min … max):   425.4 ms … 468.8 ms    10 runs
+  Time (mean ± σ):     433.3 ms ±   5.9 ms    [User: 426.2 ms, System: 5.6 ms]
+  Range (min … max):   427.0 ms … 444.3 ms    10 runs
 
 Benchmark 4: pf_c.exe
-  Time (mean ± σ):      16.1 ms ±   0.5 ms    [User: 13.1 ms, System: 3.9 ms]
-  Range (min … max):    15.1 ms …  18.3 ms    152 runs
+  Time (mean ± σ):      16.2 ms ±   0.5 ms    [User: 13.7 ms, System: 3.2 ms]
+  Range (min … max):    15.3 ms …  18.2 ms    154 runs
 
 Summary
   pf_c.exe ran
-   18.88 ± 0.74 times faster than a.exe examples/pf.fl
-   19.47 ± 0.69 times faster than lua etc/pf.lua
-   27.00 ± 1.13 times faster than python etc/pf.py
+   19.10 ± 0.68 times faster than a.exe examples/pf.fl
+   19.39 ± 0.68 times faster than lua etc/pf.lua
+   26.70 ± 0.92 times faster than python etc/pf.py
 
 $ hyperfine.exe "a.exe examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python etc/too_simple.py" "too_simple_c.exe" --warmup 3
 Benchmark 1: a.exe examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     117.3 ms ±   1.0 ms    [User: 112.8 ms, System: 4.5 ms]
-  Range (min … max):   115.9 ms … 120.1 ms    25 runs
+  Time (mean ± σ):     117.3 ms ±   1.1 ms    [User: 111.7 ms, System: 4.6 ms]
+  Range (min … max):   116.5 ms … 121.1 ms    24 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      69.0 ms ±   0.7 ms    [User: 63.5 ms, System: 4.5 ms]
-  Range (min … max):    68.0 ms …  72.5 ms    41 runs
+  Time (mean ± σ):      69.4 ms ±   0.7 ms    [User: 65.6 ms, System: 3.4 ms]
+  Range (min … max):    67.8 ms …  71.6 ms    41 runs
 
 Benchmark 3: python etc/too_simple.py
-  Time (mean ± σ):      1.298 s ±  0.011 s    [User: 1.288 s, System: 0.008 s]
-  Range (min … max):    1.290 s …  1.326 s    10 runs
+  Time (mean ± σ):      1.297 s ±  0.004 s    [User: 1.289 s, System: 0.014 s]
+  Range (min … max):    1.291 s …  1.302 s    10 runs
 
 Benchmark 4: too_simple_c.exe
-  Time (mean ± σ):      12.8 ms ±   0.6 ms    [User: 9.9 ms, System: 3.2 ms]
-  Range (min … max):    11.9 ms …  15.0 ms    174 runs
+  Time (mean ± σ):      13.0 ms ±   0.7 ms    [User: 9.2 ms, System: 4.8 ms]
+  Range (min … max):    12.1 ms …  17.6 ms    181 runs
 
 Summary
   too_simple_c.exe ran
-    5.41 ± 0.25 times faster than lua etc/too_simple.lua
-    9.19 ± 0.42 times faster than a.exe examples/too_simple_2_shunting.fl
-  101.67 ± 4.61 times faster than python etc/too_simple.py
+    5.34 ± 0.29 times faster than lua etc/too_simple.lua
+    9.04 ± 0.48 times faster than a.exe examples/too_simple_2_shunting.fl
+   99.94 ± 5.27 times faster than python etc/too_simple.py
 
 # linux
 
@@ -189,49 +189,51 @@ $ clang++ -g -ggdb -Wall -Wextra -pedantic -Wno-attributes -DUSE_MIMALLOC -lmima
    
 $ hyperfine "./a.out examples/pf.fl" "lua etc/pf.lua" "python3 etc/pf.py" "./pf_c.out" --warmup 3
 Benchmark 1: ./a.out examples/pf.fl
-  Time (mean ± σ):     299.8 ms ±   4.9 ms    [User: 265.0 ms, System: 5.8 ms]
-  Range (min … max):   292.9 ms … 307.9 ms    10 runs
+  Time (mean ± σ):     297.2 ms ±   4.6 ms    [User: 261.2 ms, System: 7.2 ms]
+  Range (min … max):   292.5 ms … 308.2 ms    10 runs
 
 Benchmark 2: lua etc/pf.lua
-  Time (mean ± σ):     288.4 ms ±   3.7 ms    [User: 255.6 ms, System: 5.5 ms]
-  Range (min … max):   285.0 ms … 296.5 ms    10 runs
+  Time (mean ± σ):     288.7 ms ±   3.7 ms    [User: 256.4 ms, System: 5.1 ms]
+  Range (min … max):   282.6 ms … 294.0 ms    10 runs
 
 Benchmark 3: python3 etc/pf.py
-  Time (mean ± σ):     304.9 ms ±  10.8 ms    [User: 269.9 ms, System: 3.4 ms]
-  Range (min … max):   293.5 ms … 331.8 ms    10 runs
+  Time (mean ± σ):     299.0 ms ±   3.7 ms    [User: 262.3 ms, System: 5.9 ms]
+  Range (min … max):   290.5 ms … 303.0 ms    10 runs
 
 Benchmark 4: ./pf_c.out
-  Time (mean ± σ):      12.1 ms ±   0.5 ms    [User: 9.5 ms, System: 0.8 ms]
-  Range (min … max):    11.2 ms …  14.6 ms    234 runs
+  Time (mean ± σ):      11.9 ms ±   0.5 ms    [User: 9.4 ms, System: 0.8 ms]
+  Range (min … max):    11.1 ms …  14.0 ms    252 runs
 
 Summary
   ./pf_c.out ran
-   23.88 ± 0.96 times faster than lua etc/pf.lua
-   24.83 ± 1.03 times faster than ./a.out examples/pf.fl
-   25.25 ± 1.32 times faster than python3 etc/pf.py
+   24.20 ± 0.99 times faster than lua etc/pf.lua
+   24.91 ± 1.04 times faster than ./a.out examples/pf.fl
+   25.06 ± 1.02 times faster than python3 etc/pf.py
 
 $ hyperfine "./a.out examples/too_simple_2_shunting.fl" "lua etc/too_simple.lua" "python3 etc/too_simple.py" "./too_simple_c.out" --warmup 3
 Benchmark 1: ./a.out examples/too_simple_2_shunting.fl
-  Time (mean ± σ):     128.3 ms ±   1.4 ms    [User: 114.2 ms, System: 0.7 ms]
-  Range (min … max):   125.9 ms … 130.8 ms    23 runs
+  Time (mean ± σ):     128.6 ms ±   0.8 ms    [User: 114.4 ms, System: 0.9 ms]
+  Range (min … max):   127.8 ms … 130.2 ms    23 runs
 
 Benchmark 2: lua etc/too_simple.lua
-  Time (mean ± σ):      77.1 ms ±   1.5 ms    [User: 68.5 ms, System: 0.8 ms]
-  Range (min … max):    74.9 ms …  83.0 ms    38 runs
+  Time (mean ± σ):      75.9 ms ±   0.6 ms    [User: 67.5 ms, System: 0.6 ms]
+  Range (min … max):    74.9 ms …  77.3 ms    39 runs
 
 Benchmark 3: python3 etc/too_simple.py
-  Time (mean ± σ):     523.2 ms ±  10.0 ms    [User: 469.0 ms, System: 2.5 ms]
-  Range (min … max):   510.8 ms … 547.8 ms    10 runs
+  Time (mean ± σ):     516.1 ms ±   6.5 ms    [User: 462.2 ms, System: 3.0 ms]
+  Range (min … max):   507.7 ms … 527.3 ms    10 runs
 
 Benchmark 4: ./too_simple_c.out
-  Time (mean ± σ):      12.0 ms ±   0.5 ms    [User: 9.9 ms, System: 0.5 ms]
-  Range (min … max):    11.4 ms …  14.6 ms    240 runs
+  Time (mean ± σ):      12.1 ms ±   0.4 ms    [User: 9.9 ms, System: 0.5 ms]
+  Range (min … max):    11.7 ms …  14.6 ms    236 runs
+
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
 
 Summary
   ./too_simple_c.out ran
-    6.41 ± 0.27 times faster than lua etc/too_simple.lua
-   10.68 ± 0.42 times faster than ./a.out examples/too_simple_2_shunting.fl
-   43.54 ± 1.84 times faster than python3 etc/too_simple.py
+    6.27 ± 0.20 times faster than lua etc/too_simple.lua
+   10.63 ± 0.33 times faster than ./a.out examples/too_simple_2_shunting.fl
+   42.64 ± 1.42 times faster than python3 etc/too_simple.py
 ```
 
 Build-related info:

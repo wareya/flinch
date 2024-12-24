@@ -333,7 +333,7 @@ Program load_program(string text)
     Program programdata;
     vector<string> program_texts;
     
-    auto & program = programdata.program;
+    auto & p = programdata.program;
     auto & lines = programdata.lines;
     auto & funcs = programdata.funcs;
     
@@ -568,28 +568,28 @@ Program load_program(string text)
         else if (token != "^^" && token.size() >= 2 && token.back() == '^')
         {
             var_defs.push_back({});
-            program.push_back(make_token(FuncDec, programdata.get_token_func_num(token.substr(0, token.size() - 1))));
+            p.push_back(make_token(FuncDec, programdata.get_token_func_num(token.substr(0, token.size() - 1))));
         }
         else if (token.size() >= 2 && token.front() == '.')
-            program.push_back(make_token(FuncCall, programdata.get_token_func_num(token.substr(1))));
+            p.push_back(make_token(FuncCall, programdata.get_token_func_num(token.substr(1))));
         else if (token != "^^" && token.size() >= 2 && token.front() == '^')
-            program.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
+            p.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
         else if (token == "^^")
         {
             var_defs.pop_back();
-            program.push_back(make_token(FuncEnd, 0));
+            p.push_back(make_token(FuncEnd, 0));
         }
         else if (token == "return")
-            program.push_back(make_token(Return, 0));
+            p.push_back(make_token(Return, 0));
         else if (token.front() == '$' && token.back() == '$' && token.size() >= 3)
         {
             auto s = token.substr(1, token.size() - 2);
             auto n = programdata.get_token_varname_num(s);
             var_defs.back().push_back(s);
             if (var_defs.size() > 1)
-                program.push_back(make_token(LocalVarDecLookup, n));
+                p.push_back(make_token(LocalVarDecLookup, n));
             else
-                program.push_back(make_token(GlobalVarDecLookup, n));
+                p.push_back(make_token(GlobalVarDecLookup, n));
         }
         else if (token.back() == '$' && token.size() >= 2)
         {
@@ -597,34 +597,34 @@ Program load_program(string text)
             auto n = programdata.get_token_varname_num(s);
             var_defs.back().push_back(s);
             if (var_defs.size() > 1)
-                program.push_back(make_token(LocalVarDec, n));
+                p.push_back(make_token(LocalVarDec, n));
             else
-                program.push_back(make_token(GlobalVarDec, n));
+                p.push_back(make_token(GlobalVarDec, n));
         }
         else if (token.front() == '$' && token.size() >= 2)
         {
             auto s = token.substr(1);
             auto n = programdata.get_token_varname_num(s);
             if (var_is_local(s))
-                program.push_back(make_token(LocalVarLookup, n));
+                p.push_back(make_token(LocalVarLookup, n));
             else if (var_is_global(s))
-                program.push_back(make_token(GlobalVarLookup, n));
+                p.push_back(make_token(GlobalVarLookup, n));
             else
                 THROWSTR("Undefined variable " + s + " on line " + std::to_string(lines[i]));
         }
         else if (token.front() == ':' && token.size() >= 2 && token != "::" && token != "::!")
-            program.push_back(make_token(LabelLookup, programdata.get_token_string_num(token.substr(1))));
+            p.push_back(make_token(LabelLookup, programdata.get_token_string_num(token.substr(1))));
         else if (token.back() == ':' && token.size() >= 2 && token != "::" && token != "::!")
-            program.push_back(make_token(LabelDec, programdata.get_token_string_num(token.substr(0, token.size() - 1))));
+            p.push_back(make_token(LabelDec, programdata.get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
-            program.push_back(make_token(trivial_ops[token], 0));
+            p.push_back(make_token(trivial_ops[token], 0));
         else if (token.size() >= 3 && token[0] == '"' && token.back() == '*') // '"' (fix tokei line counts)
         {
             vector<DynamicType> str = {};
             for (size_t i = 1; i < token.size() - 2; i++)
                 str.push_back((int64_t)token[i]);
             auto n = programdata.get_token_stringval_num(std::move(str));
-            program.push_back(make_token(StringLiteral, n));
+            p.push_back(make_token(StringLiteral, n));
         }
         else if (token.size() >= 2 && token[0] == '"' && token.back() == '"')
         {
@@ -632,22 +632,22 @@ Program load_program(string text)
             for (size_t i = 1; i < token.size() - 1; i++)
                 str->push_back((int64_t)token[i]);
             auto n = programdata.get_token_stringref_num(str);
-            program.push_back(make_token(StringLitReference, n));
+            p.push_back(make_token(StringLitReference, n));
         }
         else if (token.size() >= 2 && token[0] == '!')
         {
             auto s = token.substr(1);
-            program.push_back(make_token(BuiltinCall, builtins_lookup(s)));
+            p.push_back(make_token(BuiltinCall, builtins_lookup(s)));
         }
         else if ((token.size() == 3 || token.size() == 4) && token[0] == '\'' && token.back() == '\'')
         {
-            if (token.size() == 3) program.push_back(make_token(IntegerInline, token[1]));
+            if (token.size() == 3) p.push_back(make_token(IntegerInline, token[1]));
             else if (token.size() != 4 || token[1] != '\\') THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(lines[i]));
-            else if (token[2] == 'n') program.push_back(make_token(IntegerInline, '\n'));
-            else if (token[2] == 'r') program.push_back(make_token(IntegerInline, '\r'));
-            else if (token[2] == 't') program.push_back(make_token(IntegerInline, '\t'));
-            else if (token[2] == '\\') program.push_back(make_token(IntegerInline, '\\'));
-            else program.push_back(make_token(IntegerInline, token[2]));
+            else if (token[2] == 'n') p.push_back(make_token(IntegerInline, '\n'));
+            else if (token[2] == 'r') p.push_back(make_token(IntegerInline, '\r'));
+            else if (token[2] == 't') p.push_back(make_token(IntegerInline, '\t'));
+            else if (token[2] == '\\') p.push_back(make_token(IntegerInline, '\\'));
+            else p.push_back(make_token(IntegerInline, token[2]));
         }
         else
         {
@@ -665,13 +665,13 @@ Program load_program(string text)
                 int64_t dlo = -d;
                 
                 if (num >= dlo && num <= dhi)
-                    program.push_back(make_token(IntegerInline, (iword_t)num));
+                    p.push_back(make_token(IntegerInline, (iword_t)num));
                 else if (num2 == num && num2_smol >= dlo && num2_smol <= dhi)
-                    program.push_back(make_token(IntegerInlineBigDec, (iword_t)num2_smol));
+                    p.push_back(make_token(IntegerInlineBigDec, (iword_t)num2_smol));
                 else if (num3 == num && num3_smol >= dlo && num3_smol <= dhi)
-                    program.push_back(make_token(IntegerInlineBigBin, (iword_t)num3_smol));
+                    p.push_back(make_token(IntegerInlineBigBin, (iword_t)num3_smol));
                 else
-                    program.push_back(make_token(Integer, programdata.get_token_int_num(num)));
+                    p.push_back(make_token(Integer, programdata.get_token_int_num(num)));
             }
             else if (isfloat(token))
             {
@@ -681,15 +681,15 @@ Program load_program(string text)
                 memcpy(&dec, &d, sizeof(d));
                 
                 if ((dec >> iword_bits_from_i64) << iword_bits_from_i64 == dec)
-                    program.push_back(make_token(DoubleInline, (iword_t)(dec >> iword_bits_from_i64)));
+                    p.push_back(make_token(DoubleInline, (iword_t)(dec >> iword_bits_from_i64)));
                 else
-                    program.push_back(make_token(Double, programdata.get_token_double_num(d)));
+                    p.push_back(make_token(Double, programdata.get_token_double_num(d)));
             }
             else if (isname(token))
             {
                 auto n = programdata.get_token_varname_num(token);
                 if (var_is_local(token) || var_is_global(token))
-                    program.push_back(make_token(var_is_local(token) ? LocalVar : GlobalVar, n));
+                    p.push_back(make_token(var_is_local(token) ? LocalVar : GlobalVar, n));
                 else
                     THROWSTR("Undefined variable " + token + " on line " + std::to_string(lines[i]));
             }
@@ -697,65 +697,65 @@ Program load_program(string text)
                 THROWSTR("Invalid token: " + token);
         }
     }
-    program.push_back(make_token(Exit, 0));
+    p.push_back(make_token(Exit, 0));
     
     //for (auto & s : program_texts)
     //    printf("%s\n", s.data());
     
     auto prog_erase = [&](auto i) -> auto {
-        program.erase(program.begin() + i);
+        p.erase(p.begin() + i);
         lines.erase(lines.begin() + i);
     };
 
-    auto still_valid = [&]() { return i < program.size() && i + 1 < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit; };
+    auto still_valid = [&]() { return i < p.size() && i + 1 < p.size() && p[i].kind != Exit && p[i + 1].kind != Exit; };
 
     // peephole optimizer!
-    for (i = 0; ((ptrdiff_t)i) < 0 || (i < program.size() && program[i].kind != Exit && program[i + 1].kind != Exit); ++i)
+    for (i = 0; ((ptrdiff_t)i) < 0 || (i < p.size() && p[i].kind != Exit && p[i + 1].kind != Exit); ++i)
     {
-        if (still_valid() && program[i].kind == IntegerInline && (program[i+1].kind == Add || program[i+1].kind == Sub ||
-            program[i+1].kind == Mul || program[i+1].kind == Div || program[i+1].kind == Mod))
+        if (still_valid() && p[i].kind == IntegerInline && (p[i+1].kind == Add || p[i+1].kind == Sub ||
+            p[i+1].kind == Mul || p[i+1].kind == Div || p[i+1].kind == Mod))
         {
-            program[i].kind = (TKind)(program[i+1].kind + (AddIntInline - Add));
+            p[i].kind = (TKind)(p[i+1].kind + (AddIntInline - Add));
             prog_erase(i-- + 1);
         }
-        if (still_valid() && program[i].kind == DoubleInline && (program[i+1].kind == Add || program[i+1].kind == Sub ||
-            program[i+1].kind == Mul || program[i+1].kind == Div || program[i+1].kind == Mod))
+        if (still_valid() && p[i].kind == DoubleInline && (p[i+1].kind == Add || p[i+1].kind == Sub ||
+            p[i+1].kind == Mul || p[i+1].kind == Div || p[i+1].kind == Mod))
         {
-            program[i].kind = (TKind)(program[i+1].kind + (AddDubInline - Add));
+            p[i].kind = (TKind)(p[i+1].kind + (AddDubInline - Add));
             prog_erase(i-- + 1);
         }
-        if (still_valid() && program[i].kind == LocalVarLookup && (program[i+1].kind == AddAssign || program[i+1].kind == SubAssign ||
-             program[i+1].kind == MulAssign || program[i+1].kind == DivAssign || program[i+1].kind == ModAssign))
+        if (still_valid() && p[i].kind == LocalVarLookup && (p[i+1].kind == AddAssign || p[i+1].kind == SubAssign ||
+             p[i+1].kind == MulAssign || p[i+1].kind == DivAssign || p[i+1].kind == ModAssign))
         {
-            program[i].kind = (TKind)(program[i+1].kind + (AddAsLocal - AddAssign));
+            p[i].kind = (TKind)(p[i+1].kind + (AddAsLocal - AddAssign));
             prog_erase(i-- + 1);
         }
-        if (still_valid() && program[i].kind == LocalVarLookup &&
-            (program[i+1].kind == Assign || program[i+1].kind == Goto || program[i+1].kind == IfGoto))
+        if (still_valid() && p[i].kind == LocalVarLookup &&
+            (p[i+1].kind == Assign || p[i+1].kind == Goto || p[i+1].kind == IfGoto))
         {
-            program[i].kind = program[i+1].kind == Assign ? AsLocal : program[i+1].kind == Goto ? GotoLabel : IfGotoLabel;
+            p[i].kind = p[i+1].kind == Assign ? AsLocal : p[i+1].kind == Goto ? GotoLabel : IfGotoLabel;
             prog_erase(i-- + 1);
         }
-        if (still_valid() && program[i].kind == LabelLookup && program[i+1].kind == ForLoop)
+        if (still_valid() && p[i].kind == LabelLookup && p[i+1].kind == ForLoop)
         {
-            program[i].kind = ForLoopLabel;
+            p[i].kind = ForLoopLabel;
             prog_erase(i-- + 1);
             // need to be able to see the output of this optimization one token to the left, for the next optimization
             i--;
         }
-        if (still_valid() && i + 2 < program.size() && program[i].kind == LocalVarLookup && program[i+1].kind == IntegerInline && program[i+2].kind == ForLoopLabel)
+        if (still_valid() && i + 2 < p.size() && p[i].kind == LocalVarLookup && p[i+1].kind == IntegerInline && p[i+2].kind == ForLoopLabel)
         {
-            program[i].kind = ForLoopLocal;
-            program[i].extra_1 = program[i].n;
-            program[i].extra_2 = program[i+1].n;
-            program[i].n = program[i+2].n;
+            p[i].kind = ForLoopLocal;
+            p[i].extra_1 = p[i].n;
+            p[i].extra_2 = p[i+1].n;
+            p[i].n = p[i+2].n;
             prog_erase(i + 2);
             prog_erase(i-- + 1);
         }
-        if (still_valid() && program[i].kind >= CmpEQ && program[i].kind <= CmpGT && program[i+1].kind == IfGotoLabel)
+        if (still_valid() && p[i].kind >= CmpEQ && p[i].kind <= CmpGT && p[i+1].kind == IfGotoLabel)
         {
-            program[i].kind = TKind(IfGotoLabelEQ + (program[i].kind - CmpEQ));
-            program[i].n = program[i+1].n;
+            p[i].kind = TKind(IfGotoLabelEQ + (p[i].kind - CmpEQ));
+            p[i].n = p[i+1].n;
             prog_erase(i-- + 1);
         }
     }
@@ -769,11 +769,11 @@ Program load_program(string text)
     // rewrite in-function labels, register functions
     // also compactify in-function variables
     // also rewrite root-level labels
-    for (i = 0; i < program.size() && program[i].kind != Exit; i++)
+    for (i = 0; i < p.size() && p[i].kind != Exit; i++)
     {
-        if (program[i].kind == FuncDec)
+        if (p[i].kind == FuncDec)
         {
-            if (funcs[program[i].n].len != 0)
+            if (funcs[p[i].n].len != 0)
                 THROWSTR("Redefined function on or near line " + std::to_string(lines[i]));
             
             vector<iword_t> labels(programdata.token_strings.size());
@@ -781,67 +781,68 @@ Program load_program(string text)
             
             unordered_map<iword_t, iword_t> varnames_set;
             iword_t vn = 0;
-            for (size_t i2 = i + 1; program[i2].kind != FuncEnd; i2 += 1)
+            for (size_t i2 = i + 1; p[i2].kind != FuncEnd; i2 += 1)
             {
-                if (program[i2].kind == LabelDec)
+                if (p[i2].kind == LabelDec)
                 {
-                    labels[program[i2].n] = (iword_t)i2;
+                    labels[p[i2].n] = (iword_t)i2;
                     prog_erase(i2--);
                 }
-                if ((program[i2].kind == LocalVarDec || program[i2].kind == LocalVarDecLookup) && !varnames_set.count(program[i2].n))
-                    varnames_set.insert({program[i2].n, vn++});
+                if ((p[i2].kind == LocalVarDec || p[i2].kind == LocalVarDecLookup) && !varnames_set.count(p[i2].n))
+                    varnames_set.insert({p[i2].n, vn++});
             }
             
             // this needs to be a separate pass because labels can be seen upwards, not just downwards
             size_t i2 = i + 1;
-            for (; program[i2].kind != FuncEnd; i2 += 1)
+            for (; p[i2].kind != FuncEnd; i2 += 1)
             {
-                if (program[i2].kind == LocalVarDec || program[i2].kind == LocalVarDecLookup || program[i2].kind == LocalVarLookup ||
-                    program[i2].kind == LocalVar || program[i2].kind == AsLocal ||program[i2].kind == AddAsLocal || program[i2].kind == SubAsLocal ||
-                    program[i2].kind == MulAsLocal || program[i2].kind == DivAsLocal || program[i2].kind == ModAsLocal)
-                    program[i2].n = varnames_set[program[i2].n];
+                if (p[i2].kind == LocalVarDec || p[i2].kind == LocalVarDecLookup || p[i2].kind == LocalVarLookup ||
+                    p[i2].kind == LocalVar || p[i2].kind == AsLocal ||p[i2].kind == AddAsLocal || p[i2].kind == SubAsLocal ||
+                    p[i2].kind == MulAsLocal || p[i2].kind == DivAsLocal || p[i2].kind == ModAsLocal)
+                    p[i2].n = varnames_set[p[i2].n];
                 
-                if (program[i2].kind == ForLoopLocal)
-                    program[i2].extra_1 = varnames_set[program[i2].extra_1];
+                if (p[i2].kind == ForLoopLocal)
+                    p[i2].extra_1 = varnames_set[p[i2].extra_1];
                 
-                if (program[i2].kind == LabelLookup || program[i2].kind == GotoLabel || program[i2].kind == ForLoopLabel ||
-                    program[i2].kind == ForLoopLocal || (program[i2].kind >= IfGotoLabel && program[i2].kind <= IfGotoLabelGT))
+                if (p[i2].kind == LabelLookup || p[i2].kind == GotoLabel || p[i2].kind == ForLoopLabel ||
+                    p[i2].kind == ForLoopLocal || (p[i2].kind >= IfGotoLabel && p[i2].kind <= IfGotoLabelGT))
                 {
-                    program[i2].n = labels[program[i2].n];
-                    if(program[i2].n == (iword_t)-1)
+                    p[i2].n = labels[p[i2].n];
+                    if(p[i2].n == (iword_t)-1)
                         THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i2]));
                 }
             }
             if (i2 - i >= (size_t)iword_t(-1)) THROWSTR("Single functions contains far too many operations");
             if (vn >= (size_t)iword_t(-1))     THROWSTR("Single functions contains far too many variables");
-            funcs[program[i].n] = CompFunc{(iword_t)(i + 1), (iword_t)(i2 - i), (iword_t)vn};
+            funcs[p[i].n] = CompFunc{(iword_t)(i + 1), (iword_t)(i2 - i), (iword_t)vn};
             
             i = i2;
         }
-        else if (program[i].kind == LabelDec)
+        else if (p[i].kind == LabelDec)
         {
-            root_labels[program[i].n] = (iword_t)i;
+            root_labels[p[i].n] = (iword_t)i;
             prog_erase(i--);
         }
     }
     
     // rewrite global labels
     // this needs to be a separate pass because labels can be seen upwards, not just downwards
-    for (i = 0; i < program.size() && program[i].kind != Exit; i++)
+    for (i = 0; i < p.size() && p[i].kind != Exit; i++)
     {
-        if (program[i].kind == FuncDec) i += funcs[program[i].n].len;
+        if (p[i].kind == FuncDec) i += funcs[p[i].n].len;
         
-        if (program[i].kind == LabelLookup || program[i].kind == GotoLabel || program[i].kind == ForLoopLabel ||
-            program[i].kind == ForLoopLocal || (program[i].kind >= IfGotoLabel && program[i].kind <= IfGotoLabelGT))
+        if (p[i].kind == LabelLookup || p[i].kind == GotoLabel || p[i].kind == ForLoopLabel ||
+            p[i].kind == ForLoopLocal || (p[i].kind >= IfGotoLabel && p[i].kind <= IfGotoLabelGT))
         {
-            program[i].n = root_labels[program[i].n];
-            if (program[i].n == (iword_t)-1)
+            p[i].n = root_labels[p[i].n];
+            if (p[i].n == (iword_t)-1)
                 THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i]));
         }
     }
     
-    //for (auto & s : program)
-    //    printf("%s\n", tnames[(TKind)s.kind]);
+    // disassembler
+    //for (iword_t i = 0; i < p.size(); i++)
+    //    printf("%u \t: %s\t%u\t%u\t%u\n", i, tnames[(TKind)p[i].kind], p[i].n, p[i].extra_1, p[i].extra_2);
     
     return programdata;
 }

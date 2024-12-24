@@ -9,6 +9,4 @@ def main():
     print(f"{sumval * 4.0:.16f}")
 
 if __name__ == "__main__":
-    #import dis
-    #dis.dis(main)
     main()

@@ -4,7 +4,8 @@ size = 503
 seed = 8381853
 
 function lcg()
-    seed = ((seed + 1) * 141853155) & 0xFFFFFFFF
+    local bit = require("bit")
+    seed = bit.band(((seed + 1) * 141853155), 0xFFFFFFFFULL)
     return seed
 end
 

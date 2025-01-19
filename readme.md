@@ -76,7 +76,7 @@ A: Yeah, but it's fully-featured (as far as being a dynamically-typed language w
 
 #### Q: Does this have literally any practical uses at all?
 
-A: Practically, no. But like if you're going to throw a scripting language into something and it needs to be security-audited for some reason, 1000k lines is pretty few.
+A: Practically, no. But like if you're going to throw a scripting language into something and it needs to be security-audited for some reason, 1000 lines is pretty few.
 
 #### Q: Is this memory safe?
 

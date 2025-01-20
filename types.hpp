@@ -1,10 +1,8 @@
-#include <gc.h>
-
 inline void * safe_realloc(void * ptr, size_t len)
 {
-    if (!ptr) return GC_malloc(len);
-    if (len == 0) { GC_free(ptr); return 0; }
-    return GC_realloc(ptr, len);
+    if (!ptr) return malloc(len);
+    if (len == 0) { free(ptr); return 0; }
+    return realloc(ptr, len);
 }
 
 struct ShortString {
@@ -167,7 +165,7 @@ struct PODVec
     PODVec(size_t count, const T & value = T())
     {
         mlength = count;
-        mbuffer = (T *)GC_malloc(sizeof(T) * mlength);
+        mbuffer = (T *)malloc(sizeof(T) * mlength);
         for (size_t i = 0; i < count; i++)
             mbuffer[i] = value;
     }
@@ -176,7 +174,7 @@ struct PODVec
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
-            mbuffer = (T *)GC_malloc(sizeof(T) * mcapacity);
+            mbuffer = (T *)malloc(sizeof(T) * mcapacity);
         if (mbuffer)
             memcpy(mbuffer, other.mbuffer, sizeof(T) * mlength);
     }
@@ -187,22 +185,22 @@ struct PODVec
         mcapacity = other.mcapacity; other.mcapacity = 0;
     }
     
-    ~PODVec() { if(mbuffer) GC_free(mbuffer); mbuffer = 0; }
+    ~PODVec() { if(mbuffer) free(mbuffer); mbuffer = 0; }
     
     NOINLINE PODVec & operator=(const PODVec & other)
     {
-        if (mbuffer) GC_free(mbuffer); mbuffer = 0;
+        if (mbuffer) free(mbuffer); mbuffer = 0;
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
-            mbuffer = (T *)GC_malloc(sizeof(T) * mlength);
+            mbuffer = (T *)malloc(sizeof(T) * mlength);
         if (mbuffer)
             memcpy(mbuffer, other.mbuffer, sizeof(T) * mlength);
         return *this;
     }
     PODVec & operator=(PODVec && other)
     {
-        if (mbuffer) GC_free(mbuffer); mbuffer = 0;
+        if (mbuffer) free(mbuffer); mbuffer = 0;
         mbuffer = other.mbuffer; other.mbuffer = 0;
         mlength = other.mlength; other.mlength = 0;
         mcapacity = other.mcapacity; other.mcapacity = 0;
@@ -302,7 +300,7 @@ struct PODVec
         memset(mbuffer + mlength, 0, sizeof(T));
     }
     
-    void clear() { GC_free(mbuffer); mbuffer = 0; mlength = 0; mcapacity = 0; }
+    void clear() { free(mbuffer); mbuffer = 0; mlength = 0; mcapacity = 0; }
 };
 
 template<typename T0, typename T1>

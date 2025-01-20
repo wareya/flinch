@@ -5,7 +5,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <variant>
 #include <cstdint>
 #include <cmath>
 #include <cstring>
@@ -16,6 +15,10 @@
 #include <initializer_list>
 
 #include <gc.h>
+#define malloc(X) GC_malloc_ignore_off_page((X))
+#define free(X) GC_free((X))
+#define realloc(X, Y) GC_realloc((X), (Y))
+#define calloc(X, Y) GC_malloc_ignore_off_page((X)*(Y))
 
 #ifndef NOINLINE
 #define NOINLINE __attribute__((noinline))
@@ -54,6 +57,7 @@ template <typename T> T vec_pop_back(PODVec<T> & v)
 using namespace std;
 
 typedef uint32_t iword_t;
+typedef uint16_t iwordmini_t;
 typedef  int32_t iwordsigned_t;
 const int iword_bits_from_i64 = 8 * (sizeof(uint64_t)-sizeof(iword_t));
 
@@ -117,20 +121,29 @@ Array make_array(ArrayData backing) { return Array { backing }; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
-    variant<int64_t, double, Label, Func, Ref, Array> value;
+    union {
+        int64_t integer;
+        double real;
+        Label label;
+        Func func;
+        Ref ref;
+        Array array;
+    } v;
+    enum { INT, REAL, LABEL, FUNC, REF, ARRAY };
+    uint8_t f;
 
-    DynamicType() : value((int64_t)0) { }
-    DynamicType(int64_t v) : value((int64_t)v) { }
-    DynamicType(int v) : value((int64_t)v) { }
-    DynamicType(short v) : value((int64_t)v) { }
-    DynamicType(char v) : value((int64_t)v) { }
-    DynamicType(double v) : value((double)v) { }
-    DynamicType(const Label & l) : value(l) { }
-    DynamicType(const Func & f) : value(f) { }
-    DynamicType(const Array & a) : value(a) { }
-    DynamicType(const Ref & v) : value(v) { }
-    DynamicType(Array && a) : value(a) { }
-    DynamicType(Ref && v) : value(v) { }
+    DynamicType()            { v.integer = (int64_t)0; f = INT; }
+    DynamicType(int64_t val) { v.integer = (int64_t)val; f = INT; }
+    DynamicType(int val)     { v.integer = (int64_t)val; f = INT; }
+    DynamicType(short val)   { v.integer = (int64_t)val; f = INT; }
+    DynamicType(char val)    { v.integer = (int64_t)val; f = INT; }
+    DynamicType(double val)  { v.real    = (double) val; f = REAL; }
+    DynamicType(const Label & l) { v.label = l; f = LABEL; }
+    DynamicType(const Func & fv) { v.func  = fv; f = FUNC; }
+    DynamicType(const Array & a) { v.array = a; f = ARRAY; }
+    DynamicType(const Ref & r)   { v.ref   = r; f = REF; }
+    DynamicType(Array && a)      { v.array = a; f = ARRAY; }
+    DynamicType(Ref && r)        { v.ref   = r; f = REF; }
 
     DynamicType(const DynamicType & other) = default;
     DynamicType(DynamicType && other) noexcept = default;
@@ -138,14 +151,14 @@ struct DynamicType {
     DynamicType& operator=(DynamicType && other) noexcept = default;
     
     #define INFIX(WRAPPER1, WRAPPER2, OP, OP2, WX)\
-        if (holds_alternative<int64_t>(value) && holds_alternative<int64_t>(other.value))\
-            return WRAPPER1(WX(std::get<int64_t>(value)) OP WX(std::get<int64_t>(other.value)));\
-        else if (holds_alternative<double>(value) && holds_alternative<double>(other.value))\
-            return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<double>(other.value)));\
-        else if (holds_alternative<int64_t>(value) && holds_alternative<double>(other.value))\
-            return WRAPPER2(WX(std::get<int64_t>(value)) OP2 WX(std::get<double>(other.value)));\
-        else if (holds_alternative<double>(value) && holds_alternative<int64_t>(other.value))\
-            return WRAPPER2(WX(std::get<double>(value)) OP2 WX(std::get<int64_t>(other.value)));\
+        if (f == INT && other.f == INT)\
+            return WRAPPER1(WX(v.integer) OP WX(other.v.integer));\
+        else if (f == REAL && other.f == REAL)\
+            return WRAPPER2(WX(v.real) OP2 WX(other.v.integer));\
+        else if (f == INT && other.f == REAL)\
+            return WRAPPER2(WX(v.integer) OP2 WX(other.v.real));\
+        else if (f == REAL && other.f == INT)\
+            return WRAPPER2(WX(v.real) OP2 WX(other.v.real));\
         else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP);
     
     #define COMMA ,
@@ -174,36 +187,36 @@ struct DynamicType {
     bool operator||(const DynamicType& other) const { INFIX(!!, !!, ||, ||, ) }
     
     #define UNARY(WRAPPER, OP, WX)\
-        if (holds_alternative<int64_t>(value))\
-            return WRAPPER(OP WX(std::get<int64_t>(value)));\
-        else if (holds_alternative<double>(value))\
-            return WRAPPER(OP WX(std::get<double>(value)));\
+        if (f == INT)\
+            return WRAPPER(OP WX(v.integer));\
+        else if (f == REAL)\
+            return WRAPPER(OP WX(v.real));\
         else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP);
     
     DynamicType operator-() const { UNARY(int64_t, -, ) }
     DynamicType operator!() const { UNARY(int64_t, !, ) }
     DynamicType operator~() const { UNARY(int64_t, ~, uint64_t) }
     
-    #define AS_TYPE_X(TYPE, TYPENAME)\
-    TYPE & as_##TYPENAME()\
+    #define AS_TYPE_X(RETTYPE, TYPE, WHICH, TYPENAME)\
+    RETTYPE & as_##TYPENAME()\
     {\
-        if (holds_alternative<TYPE>(value)) return std::get<TYPE>(value);\
+        if (f == TYPE) return v.WHICH;\
         THROWSTR("Value is not of type " #TYPENAME);\
     }
     
-    AS_TYPE_X(int64_t, int)
-    AS_TYPE_X(double, double)
-    AS_TYPE_X(Ref, ref)
-    AS_TYPE_X(Label, label)
-    AS_TYPE_X(Func, func)
-    AS_TYPE_X(Array, array)
+    AS_TYPE_X(int64_t, INT  , integer, int)
+    AS_TYPE_X(double , REAL , real   , double)
+    AS_TYPE_X(Ref    , REF  , ref    , ref)
+    AS_TYPE_X(Label  , LABEL, label  , label)
+    AS_TYPE_X(Func   , FUNC , func   , func)
+    AS_TYPE_X(Array  , ARRAY, array  , array)
     
-    bool is_int() { return holds_alternative<int64_t>(value); }
-    bool is_double() { return holds_alternative<double>(value); }
-    bool is_ref() { return holds_alternative<Ref>(value); }
-    bool is_label() { return holds_alternative<Label>(value); }
-    bool is_func() { return holds_alternative<Func>(value); }
-    bool is_array() { return holds_alternative<Array>(value); }
+    bool is_int()    { return f == INT; }
+    bool is_double() { return f == REAL; }
+    bool is_ref()    { return f == REF; }
+    bool is_label()  { return f == LABEL; }
+    bool is_func()   { return f == FUNC; }
+    bool is_array()  { return f == ARRAY; }
     
     int64_t as_into_int()
     {
@@ -221,8 +234,8 @@ struct DynamicType {
         
     explicit operator bool() const
     {
-        if (holds_alternative<int64_t>(value)) return !!std::get<int64_t>(value);
-        else if (holds_alternative<double>(value)) return !!std::get<double>(value);
+        if (f == INT) return v.integer;
+        else if (f == REAL) return v.real;
         return true;
     }
     
@@ -231,11 +244,11 @@ struct DynamicType {
 
 ArrayData make_array_data(PODVec<DynamicType> x)
 {
-    auto ret = ArrayData(GC_malloc(sizeof(PODVec<DynamicType>)));
+    auto ret = ArrayData(calloc(1, sizeof(PODVec<DynamicType>)));
     *ret = std::move(x);
     return ret;
 }
-ArrayData make_array_data() { return ArrayData(GC_malloc(sizeof(PODVec<DynamicType>))); }
+ArrayData make_array_data() { return ArrayData(calloc(1, sizeof(PODVec<DynamicType>))); }
     
 DynamicType DynamicType::clone(bool deep)
 {
@@ -917,7 +930,7 @@ int interpreter_core(const Program & programdata, int i)
         i += s.funcs[n].len;
     
     INTERPRETER_MIDCASE(FuncLookup)
-        valpush((Func{s.funcs[n].loc, s.funcs[n].varcount}));
+        valpush((Func{(iwordmini_t)s.funcs[n].loc, (iwordmini_t)s.funcs[n].varcount}));
     
     INTERPRETER_MIDCASE(FuncEnd)
         s.varstack = vec_pop_back(s.varstacks);
@@ -960,7 +973,7 @@ int interpreter_core(const Program & programdata, int i)
         DO_FCALL()
     
     INTERPRETER_MIDCASE(FuncCall)
-        Func f = {s.funcs[program[i-1].n].loc, s.funcs[program[i-1].n].varcount};
+        Func f = {(iwordmini_t)s.funcs[program[i-1].n].loc, (iwordmini_t)s.funcs[program[i-1].n].varcount};
         DO_FCALL()
     
     INTERPRETER_MIDCASE(Assign) valreq(2);

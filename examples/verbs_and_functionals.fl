@@ -122,6 +122,8 @@ dip^
 
 "currying/closure..." !printstr
 
+"THESE DO NOT WORK IN THE NO-REFCOUNTING VERSION OF FLINCH. THE FOLLOWING IS GOING TO CRASH." !printstr
+
 inc_and_print^
     $n$ -> # bind top of stack (which we hope is a reference) to a var
     1 n += # increment the underlying value behind the reference

@@ -1,13 +1,12 @@
 ( 4002 -> $size$ )
 #( 2000 -> $size$ )
-#( 1001 -> $size$ )
-#( 601 -> $size$ )
 #( 503 -> $size$ )
-#( 103 -> $size$ )
+#( 262 -> $size$ )
+#( 264 -> $size$ )
 #( 202 -> $size$ )
+#( 8 -> $size$ )
 ( 8381853 -> $seed$ )
-
-
+#( 18381853 -> $seed$ )
 
 lcg^
     ( ( ( seed + 1 ) * 141853155 ) & 0xFFFFFFFF -> $seed )
@@ -43,6 +42,7 @@ pushraw^
     $heap$ -> # array reference
     
     heap @? :next if_goto
+        heap @~
         ( val -> heap ) return
     next:
     ( (( heap :: )) @ 0 <= val @ 0 ) :next2 if_goto
@@ -57,17 +57,32 @@ pushraw^
 push^
     $val$ ->
     [ ( val @ 0 ) ( val @ 1 ) [] [] 0 ] .pushraw
+    val @~
 ^^
 
 pop^
     $heap$ ->
-    ( (( heap :: )) @ 1 ) # shove return values onto stack
-    ( (( heap :: )) @ 0 )
+    ( heap @ 1 ) :: # shove return values onto stack
+    ( heap @ 0 ) ::
     ( heap @ 3 ) @? 0 == :skip if_goto
-        heap :: 3 @ $t$ ->
+        heap 3 @- $t$ ->
         ( heap @ 2 ) t .pushraw
+        :skip2 goto
     skip:
+    heap :: 3 @ @~
+    skip2:
+    heap :: $h2$ ->
     ( heap @- 2 ) heap ->
+    h2 @~
+^^
+
+clear_heap^
+    $heap$ ->
+    heap @? 0 == :skip if_goto
+    heap 2 @ .clear_heap
+    heap 3 @ .clear_heap
+    skip:
+    heap @~
 ^^
 
 dijkstra^
@@ -97,6 +112,8 @@ dijkstra^
         $current_index$ ->
 
         ( current_index != end ) :nonret if_goto
+            heap .clear_heap
+            distances @~
             current_distance return
         nonret:
 
@@ -118,6 +135,9 @@ dijkstra^
         loopend2: $i 4 :loopstart2 inc_goto_until
     
     heap @? :loop2 if_goto
+    
+    heap .clear_heap
+    distances @~
 
     -1
 ^^
@@ -141,5 +161,7 @@ size .generate_grid $grid$ ->
 #grid !print
 grid .dijkstra $shortest_path_cost$ ->
 shortest_path_cost !print
+
+grid @~
 
 "done" !printstr

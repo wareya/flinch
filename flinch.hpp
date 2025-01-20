@@ -16,17 +16,24 @@
 #include <memory>
 #include <algorithm>
 
-#include <unordered_map>
-#include <unordered_set>
+#include <cassert>
+
 #include <initializer_list>
 
 #ifndef NOINLINE
 #define NOINLINE __attribute__((noinline))
 #endif
 
+#ifdef USE_MIMALLOC
+#define malloc mi_malloc
+#define realloc mi_realloc
+#define free mi_free
+#endif
+
 //#define THROWSTR(X) throw std::runtime_error(X)
 //#define THROWSTR(X) throw (X)
-template <typename T> [[noreturn]] void THROWSTR(T X) { throw std::runtime_error(X); }
+[[noreturn]] void THROWSTR(const char * X) { throw std::runtime_error(X); }
+template <typename T> [[noreturn]] void THROWSTR(T X) { throw std::runtime_error(X.data()); }
 //template <typename T> [[noreturn]] void THROWSTR(T X) { throw X; }
 //template <typename T> [[noreturn]] void THROWSTR(T) { throw; }
 
@@ -36,17 +43,22 @@ template <typename T>
     THROWSTR("Error on line " + std::to_string(line) + ": " + e.what() + " (token " + std::to_string(i) + ")");
 }
 
-template <typename T> T & vec_at_back(std::vector<T> & v)
+#include "types.hpp"
+
+template <typename T> T & vec_at_back(PODVec<T> & v)
 {
     if (!v.size()) THROWSTR("tried to access empty buffer");
     return v.back();
 }
-template <typename T> T vec_pop_back(std::vector<T> & v)
+template <typename T> T vec_pop_back(PODVec<T> & v)
 {
     T ret = std::move(vec_at_back(v));
     v.pop_back();
     return ret;
 }
+
+#define erase_at(X, I) X.erase_at(I)
+#define insert_at(X, I, V) X.insert_at(I, V)
 
 using namespace std;
 
@@ -65,7 +77,7 @@ PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
     PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
 PFX(Neg),PFX(BitNot),PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolNot),PFX(BoolAnd),PFX(BoolOr),\
 PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(ArrayEmptyLit),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
-PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),\
+PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),PFX(ArrayDelete),\
 PFX(StringLiteral),PFX(StringLitReference),\
 PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
 PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
@@ -83,7 +95,7 @@ enum TKind : iword_t {
 #undef PFX
 
 #define PFX(X) { (X) , (#X) }
-unordered_map<TKind, const char *> tnames = { TOKEN_TABLE };
+PODListMap<TKind, const char *> tnames = { TOKEN_TABLE };
 #undef PFX
 
 //struct Token { TKind kind; iword_t n, extra_1, extra_2; };
@@ -93,73 +105,25 @@ struct Func { iword_t loc, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
-
-typedef shared_ptr<vector<DynamicType>> ArrayData;
-
-struct PointerInfo {
-    ArrayData items;
-    DynamicType * refdata;
-    size_t n;
-};
-
-struct PointerInfoPtr {
-    PointerInfo * p;
-    
-    // hold on to a few control blocks, because rapidly allocating and freeing them is expensive on some OSs like windows
-    static PointerInfo * freed_pointers[64];
-    static size_t freed_pointers_n;
-
-    PointerInfoPtr(ArrayData & items, DynamicType * addr)
-    {
-        if (freed_pointers_n)
-        {
-            p = freed_pointers[--freed_pointers_n];
-            *p = {items, addr, 1};
-        }
-        else p = new PointerInfo{items, addr, 1};
-    }
-    void rdec()
-    {
-        if (!p || --(p->n)) return;
-        if (freed_pointers_n + 1 >= sizeof(freed_pointers)/sizeof(freed_pointers[0])) { delete p; p = nullptr; return; }
-        p->items = 0;
-        freed_pointers[freed_pointers_n++] = p;
-    }
-    ~PointerInfoPtr() { rdec(); }
-    PointerInfoPtr(const PointerInfoPtr & r) noexcept { p = r.p; if(p) p->n += 1; }
-    PointerInfoPtr(PointerInfoPtr && r)      noexcept { p = r.p; r.p = nullptr; }
-    PointerInfoPtr & operator=(const PointerInfoPtr & r) noexcept { rdec(); p = r.p; if(p) p->n += 1; return *this; }
-    PointerInfoPtr & operator=(PointerInfoPtr && r)      noexcept { rdec(); p = r.p; r.p = nullptr; return *this; }
-};
-PointerInfo * PointerInfoPtr::freed_pointers[] = {};
-size_t PointerInfoPtr::freed_pointers_n = 0;
+typedef PODVec<DynamicType> * ArrayData;
 
 struct Ref {
-    PointerInfoPtr info;
-    DynamicType * ref() { return info.p->refdata; }
-    Ref(PointerInfoPtr r) noexcept : info(r) { }
+    DynamicType * root; // for maybe future GC integration......??????
+    DynamicType * info;
+    DynamicType * ref() { return info; }
 };
 
-#define MAKEREF return Ref{PointerInfoPtr(items, &items.get()->at(i))};
-#define MAKEREF2 return Ref{PointerInfoPtr(items, items.get()->data() + i)};
-
-ArrayData make_array_data(vector<DynamicType> x) { return make_shared<vector<DynamicType>>(x); }
-ArrayData make_array_data() { return make_shared<vector<DynamicType>>(); }
+#define MAKEREF return Ref{items->data(), &items->at(i)};
+#define MAKEREF2 return Ref{items->data(), items->data() + i};
 
 struct Label { int loc; };
 struct Array {
-    PointerInfoPtr info;
+    ArrayData info;
     ArrayData & items();
-    // dirtify is called whenever doing anything that might resize the array
-    // old references to inside of the array will remain pointing at valid memory, just stale and no longer actually point at the array
-    // this is done in a way where reference copies of the entire array stay pointing at the same data as each other, hence the double shared_ptr
-    // importantly, the ptr we're checking for uniqueness here is the *inner* one, not the outer one!
-    void dirtify();
-    Array(PointerInfoPtr r) noexcept : info(r) { }
 };
 
-ArrayData & Array::items() { return info.p->items; }
-Array make_array(ArrayData backing) { return Array { PointerInfoPtr(backing, 0) }; }
+ArrayData & Array::items() { return info; }
+Array make_array(ArrayData backing) { return Array { backing }; }
 
 // DynamicType can hold any of these types
 struct DynamicType {
@@ -272,54 +236,54 @@ struct DynamicType {
         return true;
     }
     
-    DynamicType clone(bool deep)
-    {
-        if (is_ref()) return *as_ref().ref();
-        else if (!is_array()) return *this;
-        auto n = make_array(make_array_data(*as_array().items()));
-        if (!deep) return n;
-        for (auto & item : *n.items()) item = item.clone(deep);
-        return n;
-    }
+    DynamicType clone(bool deep);
 };
+
+ArrayData make_array_data(PODVec<DynamicType> x) { return new PODVec<DynamicType>(std::move(x)); }
+ArrayData make_array_data() { return new PODVec<DynamicType>(); }
+    
+DynamicType DynamicType::clone(bool deep)
+{
+    if (is_ref()) return *as_ref().ref();
+    else if (!is_array()) return *this;
+    auto n = make_array(make_array_data(*as_array().items()));
+    if (!deep) return n;
+    for (auto & item : *n.items()) item = item.clone(deep);
+    return n;
+}
 
 inline Ref make_ref(ArrayData & items, size_t i) { MAKEREF }
 inline Ref make_ref_2(ArrayData & items, size_t i) { MAKEREF2 }
 
-//NOINLINE void Array::dirtify() { if (info && info->n != 1) info->items = make_array_data(*info->items); }
-NOINLINE void Array::dirtify()
-{
-    if (info.p && !info.p->items.unique())
-    {
-        auto old = info.p->items;
-        info.p->items = make_array_data(*info.p->items.get());
-        for (auto & x : *old) x = 0;
-    }
-}
-//NOINLINE void Array::dirtify() { }
-
 struct Program {
-    vector<Token> program;
-    vector<int> lines;
-    vector<CompFunc> funcs;
+    PODVec<Token> program;
+    PODVec<int> lines;
+    PODVec<CompFunc> funcs;
     
-    #define TOKEN_LOG(NAME, TYPE)\
-    vector<TYPE> token_##NAME##s;\
+    #define TOKEN_LOG(NAME, TYPE, EXTRA, EXTRA2)\
+    PODVec<TYPE> token_##NAME##s;\
     iword_t get_token_##NAME##_num(TYPE s)\
     {\
-        for (iword_t i = 0; i < token_##NAME##s.size(); i++) { if (token_##NAME##s[i] == s) return i; }\
+        for (iword_t i = 0; i < token_##NAME##s.size(); i++) { if (token_##NAME##s[i] == s) { EXTRA; return i; } }\
         token_##NAME##s.push_back(s);\
+        EXTRA2;\
         return token_##NAME##s.size() - 1;\
     }\
     TYPE get_token_##NAME(iword_t n) const { return token_##NAME##s[n]; }
     
-    TOKEN_LOG(string, string)
-    TOKEN_LOG(func, string)
-    TOKEN_LOG(varname, string)
-    TOKEN_LOG(int, int64_t)
-    TOKEN_LOG(double, double)
-    TOKEN_LOG(stringval, vector<DynamicType>)
-    TOKEN_LOG(stringref, ArrayData)
+    TOKEN_LOG(string, ShortString,,)
+    TOKEN_LOG(func, ShortString,,)
+    TOKEN_LOG(varname, ShortString,,)
+    TOKEN_LOG(int, int64_t,,)
+    TOKEN_LOG(double, double,,)
+    TOKEN_LOG(stringval, PODVec<DynamicType>,,)
+    TOKEN_LOG(stringref, ArrayData,delete s,)
+    
+    ~Program()
+    {
+        for (auto & p : token_stringrefs)
+            delete p;
+    }
 };
 
 // built-in function definitions. must be specifically here. do not move.
@@ -331,7 +295,7 @@ Program load_program(string text)
     size_t i = 0;
     
     Program programdata;
-    vector<string> program_texts;
+    PODVec<ShortString> program_texts;
     
     auto & p = programdata.program;
     auto & lines = programdata.lines;
@@ -355,12 +319,12 @@ Program load_program(string text)
             {
                 i += 3 + (text[i+1] == '\\');
                 if (i >= text.size() || i < start_i || text[i-1] != '\'')
-                    THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(line));
+                    THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + to_string(line));
             }
             else if (text[i] == '"')
             {
                 i++;
-                string s = "\"";
+                ShortString s = "\"";
                 while (i < text.size())
                 {
                     if (text[i] == '\\' && i + 1 < text.size())
@@ -392,33 +356,34 @@ Program load_program(string text)
             {
                 while (i < text.size() && !isspace(text[i])) i++;
             }
-            program_texts.push_back(text.substr(start_i, i - start_i));
+            program_texts.push_back(text.substr(start_i, i - start_i).data());
             lines.push_back(line + 1);
         }
     }
     
     //lines.push_back(lines.back());
     
+    
     //for (auto & n : program_texts)
-    //    printf("%s\n", n.data());
+    //    printf("``%s``\n", n.data());
     
     //for (auto & n : lines)
     //    printf("%d\n", n);
     //printf("(%d)\n", lines.size());
     
-    auto isint = [&](const std::string& str) {
+    auto isint = [&](const ShortString& str) {
         if (str.empty()) return false;
         for (size_t i = (str[0] == '+' || str[0] == '-'); i < str.length(); i++) { if (!std::isdigit(str[i])) return false; }
         return true;
     };
-    auto isfloat = [&](const string& str) {
+    auto isfloat = [&](const ShortString& str) {
         if (isint(str)) return false;
-        try { stod(str); return true; }
+        try { stod(str.data()); return true; }
         catch (...) { }
         return false;
     };
     
-    auto isname = [&](const string& str) {
+    auto isname = [&](const ShortString& str) {
         if (str.empty() || (!isalpha(str[0]) && str[0] != '_')) return false;
         for (size_t i = 1; i < str.size(); i++) { if (!isalnum(str[i]) && str[i] != '_') return false; }
         return true;
@@ -426,42 +391,43 @@ Program load_program(string text)
     
     programdata.get_token_func_num("");
     
-    vector<vector<string>> var_defs = {{}};
+    PODVec<PODVec<ShortString>> var_defs;
+    var_defs.push_back({});
     
-    auto var_is_local = [&](string & s) {
+    auto var_is_local = [&](ShortString & s) {
         if (var_defs.size() == 1) return false;
         return std::find(var_defs.back().begin(), var_defs.back().end(), s) != var_defs.back().end();
     };
     
-    auto var_is_global = [&](string & s) {
+    auto var_is_global = [&](ShortString & s) {
         return std::find(var_defs[0].begin(), var_defs[0].end(), s) != var_defs[0].end();
     };
     
     auto shunting_yard = [&](size_t i) {
         size_t start_i = i;
-        program_texts.erase(program_texts.begin() + i); // erase leading paren
-        lines.erase(lines.begin() + i);
+        erase_at(program_texts, i); // erase leading paren
+        erase_at(lines, i);
         
-        unordered_map<string, int> prec;
+        PODListMap<ShortString, int> prec;
         
-        #define ADD_PREC(N, X) for (auto & s : X) prec.insert({s, N});
-        ADD_PREC(6, (initializer_list<string>{ "@", "@-", "@--", "@+", "@++", "@@" }));
-        ADD_PREC(5, (initializer_list<string>{ "*", "/", "%", "<<", ">>", "&" }));
-        ADD_PREC(4, (initializer_list<string>{ "+", "-", "|", "^" }));
-        ADD_PREC(3, (initializer_list<string>{ "==", "<=", ">=", "!=", ">", "<" }));
-        ADD_PREC(2, (initializer_list<string>{ "and", "or" }));
-        ADD_PREC(1, (initializer_list<string>{ "->", "+=", "-=", "*=", "/=", "%=" }));
-        ADD_PREC(0, (initializer_list<string>{ ";" }));
+        #define ADD_PREC(N, X) for (auto & s : X) prec.insert(s, N);
+        ADD_PREC(6, (initializer_list<ShortString>{ "@", "@-", "@--", "@+", "@++", "@@" }));
+        ADD_PREC(5, (initializer_list<ShortString>{ "*", "/", "%", "<<", ">>", "&" }));
+        ADD_PREC(4, (initializer_list<ShortString>{ "+", "-", "|", "^" }));
+        ADD_PREC(3, (initializer_list<ShortString>{ "==", "<=", ">=", "!=", ">", "<" }));
+        ADD_PREC(2, (initializer_list<ShortString>{ "and", "or" }));
+        ADD_PREC(1, (initializer_list<ShortString>{ "->", "+=", "-=", "*=", "/=", "%=" }));
+        ADD_PREC(0, (initializer_list<ShortString>{ ";" }));
         
-        vector<int> nums, ops;
+        PODVec<int> nums, ops;
         
         while (i < program_texts.size() && program_texts[i] != ")")
         {
-            if (program_texts[i] == string("(" )|| program_texts[i] == string("(("))
+            if (program_texts[i] == ("(" )|| program_texts[i] == ("(("))
             {
-                for (int x = 0; i < program_texts.size() && (x || program_texts[i] == string("(") || program_texts[i] == string("((")); i++)
+                for (int x = 0; i < program_texts.size() && (x || program_texts[i] == ("(") || program_texts[i] == ("((")); i++)
                 {
-                    x += (program_texts[i] == string("(" )|| program_texts[i] == string("((")) - (program_texts[i] == string(")") || program_texts[i] == string("))"));
+                    x += (program_texts[i] == ("(" )|| program_texts[i] == ("((")) - (program_texts[i] == (")") || program_texts[i] == ("))"));
                     nums.push_back(i);
                 }
             }
@@ -481,8 +447,8 @@ Program load_program(string text)
             THROWSTR("Paren expression must end in a closing paren, i.e. ')', starting on or near line " + to_string(lines[start_i]));
         
         // parallel move; we go through this effort to keep lines and texts in sync
-        vector<string> texts_s;
-        vector<int> lines_s;
+        PODVec<ShortString> texts_s;
+        PODVec<int> lines_s;
         for (size_t j = 0; j < nums.size(); j++)
         {
             texts_s.push_back(std::move(program_texts[nums[j]]));
@@ -494,78 +460,79 @@ Program load_program(string text)
             lines[j + start_i] = lines_s[j];
         }
         
-        program_texts.erase(program_texts.begin() + i);
-        lines.erase(lines.begin() + i);
+        erase_at(program_texts, i);
+        erase_at(lines, i);
     };
     
-    unordered_map<string, TKind> trivial_ops;
+    PODListMap<ShortString, TKind> trivial_ops;
     
-    trivial_ops.insert({"call", Call});
-    trivial_ops.insert({"if_goto", IfGoto});
-    trivial_ops.insert({"goto", Goto});
-    trivial_ops.insert({"inc_goto_until", ForLoop});
-    trivial_ops.insert({"punt", Punt});
-    trivial_ops.insert({"punt_n", PuntN});
+    trivial_ops.insert("call", Call);
+    trivial_ops.insert("if_goto", IfGoto);
+    trivial_ops.insert("goto", Goto);
+    trivial_ops.insert("inc_goto_until", ForLoop);
+    trivial_ops.insert("punt", Punt);
+    trivial_ops.insert("punt_n", PuntN);
     
-    trivial_ops.insert({"->", Assign});
+    trivial_ops.insert("->", Assign);
     
-    trivial_ops.insert({"[", ScopeOpen});
-    trivial_ops.insert({"]~", ScopeClose});
-    trivial_ops.insert({"]", ArrayBuild});
-    trivial_ops.insert({"[]", ArrayEmptyLit});
+    trivial_ops.insert("[", ScopeOpen);
+    trivial_ops.insert("]~", ScopeClose);
+    trivial_ops.insert("]", ArrayBuild);
+    trivial_ops.insert("[]", ArrayEmptyLit);
     
-    trivial_ops.insert({"+", Add});
-    trivial_ops.insert({"-", Sub});
-    trivial_ops.insert({"*", Mul});
-    trivial_ops.insert({"/", Div});
-    trivial_ops.insert({"%", Mod});
+    trivial_ops.insert("+", Add);
+    trivial_ops.insert("-", Sub);
+    trivial_ops.insert("*", Mul);
+    trivial_ops.insert("/", Div);
+    trivial_ops.insert("%", Mod);
     
-    trivial_ops.insert({"+=", AddAssign});
-    trivial_ops.insert({"-=", SubAssign});
-    trivial_ops.insert({"*=", MulAssign});
-    trivial_ops.insert({"/=", DivAssign});
-    trivial_ops.insert({"%=", ModAssign});
+    trivial_ops.insert("+=", AddAssign);
+    trivial_ops.insert("-=", SubAssign);
+    trivial_ops.insert("*=", MulAssign);
+    trivial_ops.insert("/=", DivAssign);
+    trivial_ops.insert("%=", ModAssign);
     
-    trivial_ops.insert({"&", And});
-    trivial_ops.insert({"|", Or});
-    trivial_ops.insert({"^", Xor});
-    trivial_ops.insert({"<<", Shl});
-    trivial_ops.insert({">>", Shr});
+    trivial_ops.insert("&", And);
+    trivial_ops.insert("|", Or);
+    trivial_ops.insert("^", Xor);
+    trivial_ops.insert("<<", Shl);
+    trivial_ops.insert(">>", Shr);
     
-    trivial_ops.insert({"neg", Neg});
-    trivial_ops.insert({"~", BitNot});
-    trivial_ops.insert({"!", BoolNot});
+    trivial_ops.insert("neg", Neg);
+    trivial_ops.insert("~", BitNot);
+    trivial_ops.insert("!", BoolNot);
     
-    trivial_ops.insert({"and", BoolAnd});
-    trivial_ops.insert({"or", BoolOr});
+    trivial_ops.insert("and", BoolAnd);
+    trivial_ops.insert("or", BoolOr);
     
-    trivial_ops.insert({"==", CmpEQ});
-    trivial_ops.insert({"!=", CmpNE});
-    trivial_ops.insert({"<=", CmpLE});
-    trivial_ops.insert({">=", CmpGE});
-    trivial_ops.insert({"<",  CmpLT});
-    trivial_ops.insert({">",  CmpGT});
+    trivial_ops.insert("==", CmpEQ);
+    trivial_ops.insert("!=", CmpNE);
+    trivial_ops.insert("<=", CmpLE);
+    trivial_ops.insert(">=", CmpGE);
+    trivial_ops.insert("<",  CmpLT);
+    trivial_ops.insert(">",  CmpGT);
     
-    trivial_ops.insert({"::", Clone});
-    trivial_ops.insert({"::!", CloneDeep});
+    trivial_ops.insert("::", Clone);
+    trivial_ops.insert("::!", CloneDeep);
     
-    trivial_ops.insert({"@", ArrayIndex});
-    trivial_ops.insert({"@?", ArrayLen});
-    trivial_ops.insert({"@?-", ArrayLenMinusOne});
-    trivial_ops.insert({"@+", ArrayPushIn});
-    trivial_ops.insert({"@-", ArrayPopOut});
-    trivial_ops.insert({"@++", ArrayPushBack});
-    trivial_ops.insert({"@--", ArrayPopBack});
-    trivial_ops.insert({"@@", ArrayConcat});
+    trivial_ops.insert("@", ArrayIndex);
+    trivial_ops.insert("@?", ArrayLen);
+    trivial_ops.insert("@?-", ArrayLenMinusOne);
+    trivial_ops.insert("@+", ArrayPushIn);
+    trivial_ops.insert("@-", ArrayPopOut);
+    trivial_ops.insert("@++", ArrayPushBack);
+    trivial_ops.insert("@--", ArrayPopBack);
+    trivial_ops.insert("@@", ArrayConcat);
+    trivial_ops.insert("@~", ArrayDelete);
     
     for (i = 0; i < program_texts.size() && program_texts[i] != ""; i++)
     {
-        string & token = program_texts[i];
+        ShortString & token = program_texts[i];
 
         if (token == "(")
             shunting_yard(i--);
         else if (token == "((" || token == "))" || token == ";")
-            lines.erase(lines.begin() + i);
+            erase_at(lines, i);
         else if (token != "^^" && token.size() >= 2 && token.back() == '^')
         {
             var_defs.push_back({});
@@ -577,6 +544,7 @@ Program load_program(string text)
             p.push_back(make_token(FuncLookup, programdata.get_token_func_num(token.substr(1))));
         else if (token == "^^")
         {
+            var_defs.back().clear();
             var_defs.pop_back();
             p.push_back(make_token(FuncEnd, 0));
         }
@@ -585,8 +553,8 @@ Program load_program(string text)
         else if (token.front() == '$' && token.back() == '$' && token.size() >= 3)
         {
             auto s = token.substr(1, token.size() - 2);
-            auto n = programdata.get_token_varname_num(s);
             var_defs.back().push_back(s);
+            auto n = programdata.get_token_varname_num(s);
             if (var_defs.size() > 1)
                 p.push_back(make_token(LocalVarDecLookup, n));
             else
@@ -611,17 +579,19 @@ Program load_program(string text)
             else if (var_is_global(s))
                 p.push_back(make_token(GlobalVarLookup, n));
             else
-                THROWSTR("Undefined variable " + s + " on line " + std::to_string(lines[i]));
+                THROWSTR("Undefined variable " + s + " on line " + to_string(lines[i]).data());
         }
         else if (token.front() == ':' && token.size() >= 2 && token != "::" && token != "::!")
             p.push_back(make_token(LabelLookup, programdata.get_token_string_num(token.substr(1))));
         else if (token.back() == ':' && token.size() >= 2 && token != "::" && token != "::!")
             p.push_back(make_token(LabelDec, programdata.get_token_string_num(token.substr(0, token.size() - 1))));
         else if (trivial_ops.count(token))
+        {
             p.push_back(make_token(trivial_ops[token], 0));
+        }
         else if (token.size() >= 3 && token[0] == '"' && token.back() == '*') // '"' (fix tokei line counts)
         {
-            vector<DynamicType> str = {};
+            PODVec<DynamicType> str = {};
             for (size_t i = 1; i < token.size() - 2; i++)
                 str.push_back((int64_t)token[i]);
             auto n = programdata.get_token_stringval_num(std::move(str));
@@ -643,7 +613,7 @@ Program load_program(string text)
         else if ((token.size() == 3 || token.size() == 4) && token[0] == '\'' && token.back() == '\'')
         {
             if (token.size() == 3) p.push_back(make_token(IntegerInline, token[1]));
-            else if (token.size() != 4 || token[1] != '\\') THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + std::to_string(lines[i]));
+            else if (token.size() != 4 || token[1] != '\\') THROWSTR("Char literal must be a single char or a \\ followed by a single char on line " + to_string(lines[i]));
             else if (token[2] == 'n') p.push_back(make_token(IntegerInline, '\n'));
             else if (token[2] == 'r') p.push_back(make_token(IntegerInline, '\r'));
             else if (token[2] == 't') p.push_back(make_token(IntegerInline, '\t'));
@@ -655,7 +625,7 @@ Program load_program(string text)
             if (isint(token))
             {
                 int sbits = (sizeof(iword_t)*8-1);
-                int64_t num = stoll(token);
+                int64_t num = stoll(token.data());
                 int64_t num2_smol = num  / (sbits == 15 ? 10000 : sbits == 31 ? 1000000000 : sbits == 63 ? 1 : 50);
                 int64_t num2 = num2_smol * (sbits == 15 ? 10000 : sbits == 31 ? 1000000000 : sbits == 63 ? 1 : 50);
                 int64_t num3_smol = num >> sbits;
@@ -676,7 +646,7 @@ Program load_program(string text)
             }
             else if (isfloat(token))
             {
-                auto d = stod(token);
+                auto d = stod(token.data());
                 
                 uint64_t dec;
                 memcpy(&dec, &d, sizeof(d));
@@ -692,7 +662,7 @@ Program load_program(string text)
                 if (var_is_local(token) || var_is_global(token))
                     p.push_back(make_token(var_is_local(token) ? LocalVar : GlobalVar, n));
                 else
-                    THROWSTR("Undefined variable " + token + " on line " + std::to_string(lines[i]));
+                    THROWSTR("Undefined variable " + token + " on line " + to_string(lines[i]).data());
             }
             else
                 THROWSTR("Invalid token: " + token);
@@ -704,8 +674,8 @@ Program load_program(string text)
     //    printf("%s\n", s.data());
     
     auto prog_erase = [&](auto i) -> auto {
-        p.erase(p.begin() + i);
-        lines.erase(lines.begin() + i);
+        erase_at(p, i);
+        erase_at(lines, i);
     };
 
     auto still_valid = [&]() { return i < p.size() && i + 1 < p.size() && p[i].kind != Exit && p[i + 1].kind != Exit; };
@@ -761,10 +731,10 @@ Program load_program(string text)
         }
     }
 
-    funcs = vector<CompFunc>(programdata.token_funcs.size());
+    funcs = PODVec<CompFunc>(programdata.token_funcs.size());
     std::fill(funcs.begin(), funcs.end(), CompFunc{0,0,0});
     
-    vector<iword_t> root_labels(programdata.token_strings.size());
+    PODVec<iword_t> root_labels(programdata.token_strings.size());
     std::fill(root_labels.begin(), root_labels.end(), (iword_t)-1);
     
     // rewrite in-function labels, register functions
@@ -775,12 +745,12 @@ Program load_program(string text)
         if (p[i].kind == FuncDec)
         {
             if (funcs[p[i].n].len != 0)
-                THROWSTR("Redefined function on or near line " + std::to_string(lines[i]));
+                THROWSTR("Redefined function on or near line " + to_string(lines[i]));
             
-            vector<iword_t> labels(programdata.token_strings.size());
+            PODVec<iword_t> labels(programdata.token_strings.size());
             std::fill(labels.begin(), labels.end(), (iword_t)-1);
             
-            unordered_map<iword_t, iword_t> varnames_set;
+            PODListMap<iword_t, iword_t> varnames_set;
             iword_t vn = 0;
             for (size_t i2 = i + 1; p[i2].kind != FuncEnd; i2 += 1)
             {
@@ -790,7 +760,7 @@ Program load_program(string text)
                     prog_erase(i2--);
                 }
                 if ((p[i2].kind == LocalVarDec || p[i2].kind == LocalVarDecLookup) && !varnames_set.count(p[i2].n))
-                    varnames_set.insert({p[i2].n, vn++});
+                    varnames_set.insert(p[i2].n, vn++);
             }
             
             // this needs to be a separate pass because labels can be seen upwards, not just downwards
@@ -810,7 +780,7 @@ Program load_program(string text)
                 {
                     p[i2].n = labels[p[i2].n];
                     if(p[i2].n == (iword_t)-1)
-                        THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i2]));
+                        THROWSTR("Unknown label usage on or near line " + to_string(lines[i2]));
                 }
             }
             if (i2 - i >= (size_t)iword_t(-1)) THROWSTR("Single functions contains far too many operations");
@@ -837,7 +807,7 @@ Program load_program(string text)
         {
             p[i].n = root_labels[p[i].n];
             if (p[i].n == (iword_t)-1)
-                THROWSTR("Unknown label usage on or near line " + std::to_string(lines[i]));
+                THROWSTR("Unknown label usage on or near line " + to_string(lines[i]));
         }
     }
     
@@ -845,24 +815,44 @@ Program load_program(string text)
     //for (iword_t i = 0; i < p.size(); i++)
     //    printf("%u \t: %s\t%u\t%u\t%u\n", i, tnames[(TKind)p[i].kind], p[i].n, p[i].extra_1, p[i].extra_2);
     
+    for (auto & n : var_defs)
+        n.clear();
+    
     return programdata;
 }
 
 struct ProgramState {
     const Program & programdata;
-    const vector<CompFunc> & funcs;
-    vector<DynamicType> vars_default;
-    vector<iword_t> callstack;
+    const PODVec<CompFunc> & funcs;
+    PODVec<DynamicType> vars_default;
+    PODVec<iword_t> callstack;
     
     ArrayData globals;
     DynamicType * globals_raw;
     
-    vector<ArrayData> varstacks;
+    PODVec<ArrayData> varstacks;
     ArrayData varstack;
     DynamicType * varstack_raw;
     
-    vector<vector<DynamicType>> evalstacks;
-    vector<DynamicType> evalstack;
+    PODVec<PODVec<DynamicType>> evalstacks;
+    PODVec<DynamicType> evalstack;
+    
+    ~ProgramState()
+    {
+        for (auto & n : varstacks)
+        {
+            n->clear();
+            delete n;
+        }
+        for (auto & n : evalstacks)
+            n.clear();
+        evalstacks.clear();
+        evalstack.clear();
+        globals->clear();
+        delete globals;
+        varstack->clear();
+        delete varstack;
+    }
 };
 
 #if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
@@ -875,12 +865,21 @@ int interpreter_core(const Program & programdata, int i)
 {
     auto program = programdata.program.data();
     
-    vector<DynamicType> vars_default;
+    PODVec<DynamicType> vars_default;
     for (size_t i = 0; i < programdata.token_varnames.size(); i++) vars_default.push_back(0);
     
     auto s = ProgramState {
         programdata, programdata.funcs, vars_default, {},
-        make_array_data(vars_default), 0, {}, make_array_data(vars_default), 0, {}, {}
+        
+        make_array_data(vars_default),
+        0,
+        
+        {},
+        make_array_data(vars_default),
+        0,
+        
+        {},
+        {}
     };
     
     s.globals_raw = s.globals->data();
@@ -950,10 +949,14 @@ int interpreter_core(const Program & programdata, int i)
         valpush((Func{s.funcs[n].loc, s.funcs[n].varcount}));
     
     INTERPRETER_MIDCASE(FuncEnd)
+        s.varstack->clear();
+        delete s.varstack;
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
     INTERPRETER_MIDCASE(Return)
+        s.varstack->clear();
+        delete s.varstack;
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
@@ -982,7 +985,7 @@ int interpreter_core(const Program & programdata, int i)
         s.callstack.push_back(i);\
         i = f.loc;\
         s.varstacks.push_back(std::move(s.varstack));\
-        s.varstack = make_array_data(vector(f.varcount, DynamicType(0)));\
+        s.varstack = make_array_data(PODVec(f.varcount, DynamicType(0)));\
         s.varstack_raw = s.varstack->data();
     
     INTERPRETER_MIDCASE(Call)
@@ -1144,31 +1147,27 @@ int interpreter_core(const Program & programdata, int i)
         uint64_t n = valpop().as_into_int();
         auto v = valpop();
         Array * a = v.as_array_ptr_thru_ref();
-        a->dirtify();
         if (a->items()->size() < n) THROWSTR("tried to access past end of array");
-        a->items()->insert(a->items()->begin() + n, std::move(inval));
+        insert_at((*a->items()), n, std::move(inval));
     
     INTERPRETER_MIDCASE(ArrayPopOut) valreq(2);
         uint64_t n = valpop().as_into_int();
         auto & v = valback();
         Array * a = v.as_array_ptr_thru_ref();
-        a->dirtify();
         auto ret = (*a->items()).at(n);
         if (a->items()->size() <= n) THROWSTR("tried to access past end of array");
-        a->items()->erase(a->items()->begin() + n);
+        erase_at((*a->items()), n);
         v = std::move(ret);
     
     INTERPRETER_MIDCASE(ArrayPushBack) valreq(2);
         auto inval = valpop();
         auto v = valpop();
         Array * a = v.as_array_ptr_thru_ref();
-        a->dirtify();
         a->items()->push_back(inval);
     
     INTERPRETER_MIDCASE(ArrayPopBack)
         auto & v = valback();
         Array * a = v.as_array_ptr_thru_ref();
-        a->dirtify();
         v = vec_pop_back(*a->items());
     
     INTERPRETER_MIDCASE(ArrayConcat) valreq(2);
@@ -1176,11 +1175,14 @@ int interpreter_core(const Program & programdata, int i)
         Array * ar = vr.as_array_ptr_thru_ref();
         auto & vl = valback();
         Array * al = vl.as_array_ptr_thru_ref();
-        auto newarray = make_array(make_array_data());
-        
-        newarray.items()->insert(newarray.items()->end(), al->items()->begin(), al->items()->end());
-        newarray.items()->insert(newarray.items()->end(), ar->items()->begin(), ar->items()->end());
-        vl = std::move(newarray);
+        for (auto & item : *ar->items())
+            al->items()->push_back(item);
+        delete ar->info;
+    
+    INTERPRETER_MIDCASE(ArrayDelete)
+        auto v = valpop();
+        Array * a = v.as_array_ptr_thru_ref();
+        delete a->info;
     
     INTERPRETER_MIDCASE(StringLiteral)
         valpush(make_array(make_array_data(s.programdata.get_token_stringval(n))));
@@ -1200,8 +1202,7 @@ int interpreter_core(const Program & programdata, int i)
         size_t count = valpop().as_into_int();
         auto & b = s.evalstacks.back();
         valreq(count);
-        for (size_t n = 0; n < count; n++) b.push_back(std::move(*(s.evalstack.end()-1-n)));
-        s.evalstack.erase(s.evalstack.end()-count, s.evalstack.end());
+        for (size_t n = 0; n < count; n++) b.push_back(vec_pop_back(s.evalstack));
     
     INTERPRETER_MIDCASE(Exit)
         INTERPRETER_DOEXIT();

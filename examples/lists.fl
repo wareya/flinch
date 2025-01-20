@@ -29,7 +29,5 @@ fend: $b @? 0 > :fstart if_goto
 $a !print
 $b !print
 
-#while (i < len(a) && len(b) > 0):
-#    while (i < len(a) && a[i] < b[0]):
-#        i++
-
+a @~
+b @~

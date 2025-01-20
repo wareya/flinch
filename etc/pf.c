@@ -4,7 +4,7 @@
 #include <limits.h>
 #include <string.h>
 
-#define SIZE 503
+#define SIZE 4002
 uint32_t seed = 8381853;
 
 uint32_t lcg()
@@ -12,7 +12,6 @@ uint32_t lcg()
     seed = (seed + 1) * 141853155;
     return seed;
 }
-
 void generate_grid(int *grid, int size)
 {
     for (int i = 0; i < size * size; i++)
@@ -28,12 +27,10 @@ void generate_grid(int *grid, int size)
         grid[n + size * (size - 1)] = 0;
     }
 }
-
 typedef struct _Node {
     int key;
     int value;
-    struct _Node * left;
-    struct _Node * right;
+    struct _Node * n[2];
     int flag;
 } Node;
 
@@ -42,25 +39,26 @@ typedef struct {
     int value;
 } PopRet;
 
+size_t total_ops = 0;
 void pushraw(Node ** heap, Node * val)
 {
+    total_ops += 1;
     if (!*heap)
-        *heap = val;
+        return (void)(*heap = val);
     else if ((*heap)->key > val->key)
     {
         Node * temp = *heap;
         *heap = val;
-        pushraw(heap, temp);
+        val = temp;
     }
-    else
-    {
-        (*heap)->flag = ((*heap)->flag + 1) & 1;
-        pushraw((*heap)->flag == 0 ? &((*heap)->left) : &((*heap)->right), val);
-    }
+    
+    pushraw(&(*heap)->n[(*heap)->flag], val);
+    (*heap)->flag = !(*heap)->flag;
 }
+
 void push(Node ** heap, int key, int value)
 {
-    Node * val = (Node*)calloc(sizeof(Node), 1);
+    Node * val = (Node*)calloc(1, sizeof(Node));
     val->key = key;
     val->value = value;
     pushraw(heap, val);
@@ -71,16 +69,21 @@ PopRet pop(Node ** heap)
     ret.key = (*heap)->key;
     ret.value = (*heap)->value;
 
-    if ((*heap)->right != NULL)
-        pushraw(&((*heap)->left), (*heap)->right);
+    if ((*heap)->n[1] != NULL)
+        pushraw(&((*heap)->n[0]), (*heap)->n[1]);
+    
     Node * temp = *heap;
-    *heap = (*heap)->left; 
+    *heap = (*heap)->n[0]; 
     free(temp);
 
     return ret;
 }
+int has_top(Node * f)
+{
+    return !!f;
+}
 
-int dijkstra(int *grid, int size)
+int dijkstra(int * grid, int size)
 {
     int start = size * (size - 2) + 1;
     int end = size * 2 - 2;
@@ -91,10 +94,11 @@ int dijkstra(int *grid, int size)
     distances[start] = 0;
 
     Node * heap = 0;
+    
     push(&heap, 0, start);
 
     int result = -1;
-    while (heap)
+    while (has_top(heap))
     {
         PopRet current = pop(&heap);
 
@@ -104,13 +108,16 @@ int dijkstra(int *grid, int size)
             break;
         }
 
-        if (current.key > distances[current.value]) continue;
+        if (current.key > distances[current.value])
+            continue;
 
         int neighbors[4];
         neighbors[0] = current.value - 1;
         neighbors[1] = current.value + 1;
         neighbors[2] = current.value - size;
         neighbors[3] = current.value + size;
+        
+        
         for (int i = 0; i < 4; i++)
         {
             int neighbor = neighbors[i];
@@ -125,7 +132,7 @@ int dijkstra(int *grid, int size)
         }
     }
 
-    while (heap) pop(&heap); // free heap
+    while (has_top(heap)) pop(&heap); // free heap
     free(distances);
     return result;
 }
@@ -140,5 +147,6 @@ int main()
     printf("Shortest path cost from bottom-left to top-right: %d\n", shortest_path_cost);
 
     free(grid);
+    printf("total ops: %zu\n", total_ops);
     return 0;
 }

@@ -121,7 +121,7 @@ struct PointerInfoPtr {
     void rdec()
     {
         if (!p || --(p->n)) return;
-        if (freed_pointers_n >= sizeof(freed_pointers)/sizeof(freed_pointers[0])) { delete p; p = nullptr; return; }
+        if (freed_pointers_n + 1 >= sizeof(freed_pointers)/sizeof(freed_pointers[0])) { delete p; p = nullptr; return; }
         p->items = 0;
         freed_pointers[freed_pointers_n++] = p;
     }
@@ -382,9 +382,10 @@ Program load_program(string text)
                 }
                 
                 // reference-type strings
-                if (text[++i] == '*') s += text[i++];
+                i += 1;
+                if (i < text.size() && text[i] == '*') s += text[i++];
                 
-                if (!isspace(text[i]) && text[i] != 0)
+                if (i < text.size() && !isspace(text[i]) && text[i] != 0)
                     THROWSTR("String literals must not have trailing text after the closing \" character");
             }
             else
@@ -396,7 +397,7 @@ Program load_program(string text)
         }
     }
     
-    lines.push_back(lines.back());
+    //lines.push_back(lines.back());
     
     //for (auto & n : program_texts)
     //    printf("%s\n", n.data());
@@ -658,7 +659,7 @@ Program load_program(string text)
                 int64_t num2_smol = num  / (sbits == 15 ? 10000 : sbits == 31 ? 1000000000 : sbits == 63 ? 1 : 50);
                 int64_t num2 = num2_smol * (sbits == 15 ? 10000 : sbits == 31 ? 1000000000 : sbits == 63 ? 1 : 50);
                 int64_t num3_smol = num >> sbits;
-                int64_t num3 = num3_smol << sbits;
+                int64_t num3 = (uint64_t)num3_smol << sbits;
                 
                 int64_t d = (int64_t)1 << sbits;
                 int64_t dhi = d-1;
@@ -994,7 +995,8 @@ int interpreter_core(const Program & programdata, int i)
     
     INTERPRETER_MIDCASE(Assign) valreq(2);
         Ref ref = valpop().as_ref();
-        *ref.ref() = valpop();
+        auto x = valpop();
+        *ref.ref() = std::move(x);
     
     INTERPRETER_MIDCASE(AsLocal)
         s.varstack_raw[n] = valpop();

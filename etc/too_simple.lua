@@ -3,7 +3,7 @@
 function main()
     local sum = 0.0
     local flip = -1.0
-    for i = 1, 10000000 do
+    for i = 1, 100000000 do
         flip = -flip
         --sum = sum + flip / (2 * i - 1)
         sum = sum + flip / ((i << 1) - 1)

@@ -69,6 +69,13 @@ void f_dump(vector<DynamicType> & stack)
     for (auto x : *a->items())
         stack.push_back(x);
 }
+void f_sqrt(vector<DynamicType> & stack)
+{
+    DynamicType val = vec_pop_back(stack);
+    if (val.is_int())         stack.push_back(sqrt(val.as_int()));
+    else if (val.is_double()) stack.push_back(sqrt(val.as_double()));
+    else THROWSTR("in sqrt: not a number");
+}
 
 //typedef void(*builtin_func)(vector<DynamicType> &);
 //const static builtin_func builtins[] = {
@@ -78,6 +85,7 @@ static void(* const builtins [])(vector<DynamicType> &) = {
     f_first,
     f_last,
     f_dump,
+    f_sqrt,
 };
 static inline int builtins_lookup(const string & s)
 {
@@ -91,6 +99,8 @@ static inline int builtins_lookup(const string & s)
         return 3;
     else if (s == std::string("dump"))
         return 4;
+    else if (s == std::string("sqrt"))
+        return 5;
     else
         THROWSTR("Unknown built-in function: " + s);
 };

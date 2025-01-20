@@ -1,6 +1,7 @@
 #SIZE = 2000
-SIZE = 503
+SIZE = 4002
 #SIZE = 202
+#SIZE = 8
 seed = 8381853
 
 def lcg():
@@ -37,8 +38,11 @@ def pushraw(heap, val):
         heap[4] = (heap[4]+1)&1
         pushraw(heap[2+heap[4]], val)
 
+
+
 def push(heap, val):
     pushraw(heap, [val[0], val[1], [], [], 0])
+
 
 def pop(heap):
     ret = [heap[0], heap[1]]

@@ -99,13 +99,12 @@ struct DynamicType;
 typedef PODVec<DynamicType> * ArrayData;
 
 struct Ref {
-    DynamicType * root; // for maybe future GC integration......??????
     DynamicType * info;
     DynamicType * ref() { return info; }
 };
 
-#define MAKEREF return Ref{items->data(), &items->at(i)};
-#define MAKEREF2 return Ref{items->data(), items->data() + i};
+#define MAKEREF return Ref{&items->at(i)};
+#define MAKEREF2 return Ref{items->data() + i};
 
 struct Label { int loc; };
 struct Array {

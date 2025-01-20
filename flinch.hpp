@@ -1,10 +1,6 @@
 #ifndef FLINCH_INCLUDE
 #define FLINCH_INCLUDE
 
-#ifdef USE_MIMALLOC
-#include <mimalloc-new-delete.h>
-#endif
-
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -17,17 +13,12 @@
 #include <algorithm>
 
 #include <cassert>
-
 #include <initializer_list>
+
+#include <gc.h>
 
 #ifndef NOINLINE
 #define NOINLINE __attribute__((noinline))
-#endif
-
-#ifdef USE_MIMALLOC
-#define malloc mi_malloc
-#define realloc mi_realloc
-#define free mi_free
 #endif
 
 //#define THROWSTR(X) throw std::runtime_error(X)
@@ -77,7 +68,7 @@ PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
     PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
 PFX(Neg),PFX(BitNot),PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolNot),PFX(BoolAnd),PFX(BoolOr),\
 PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(ArrayEmptyLit),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
-PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),PFX(ArrayDelete),\
+PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),\
 PFX(StringLiteral),PFX(StringLitReference),\
 PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
 PFX(Goto),PFX(GotoLabel),PFX(IfGoto),PFX(IfGotoLabel),\
@@ -239,8 +230,13 @@ struct DynamicType {
     DynamicType clone(bool deep);
 };
 
-ArrayData make_array_data(PODVec<DynamicType> x) { return new PODVec<DynamicType>(std::move(x)); }
-ArrayData make_array_data() { return new PODVec<DynamicType>(); }
+ArrayData make_array_data(PODVec<DynamicType> x)
+{
+    auto ret = ArrayData(GC_malloc(sizeof(PODVec<DynamicType>)));
+    *ret = std::move(x);
+    return ret;
+}
+ArrayData make_array_data() { return ArrayData(GC_malloc(sizeof(PODVec<DynamicType>))); }
     
 DynamicType DynamicType::clone(bool deep)
 {
@@ -277,13 +273,7 @@ struct Program {
     TOKEN_LOG(int, int64_t,,)
     TOKEN_LOG(double, double,,)
     TOKEN_LOG(stringval, PODVec<DynamicType>,,)
-    TOKEN_LOG(stringref, ArrayData,delete s,)
-    
-    ~Program()
-    {
-        for (auto & p : token_stringrefs)
-            delete p;
-    }
+    TOKEN_LOG(stringref, ArrayData,,)
 };
 
 // built-in function definitions. must be specifically here. do not move.
@@ -523,7 +513,6 @@ Program load_program(string text)
     trivial_ops.insert("@++", ArrayPushBack);
     trivial_ops.insert("@--", ArrayPopBack);
     trivial_ops.insert("@@", ArrayConcat);
-    trivial_ops.insert("@~", ArrayDelete);
     
     for (i = 0; i < program_texts.size() && program_texts[i] != ""; i++)
     {
@@ -836,23 +825,6 @@ struct ProgramState {
     
     PODVec<PODVec<DynamicType>> evalstacks;
     PODVec<DynamicType> evalstack;
-    
-    ~ProgramState()
-    {
-        for (auto & n : varstacks)
-        {
-            n->clear();
-            delete n;
-        }
-        for (auto & n : evalstacks)
-            n.clear();
-        evalstacks.clear();
-        evalstack.clear();
-        globals->clear();
-        delete globals;
-        varstack->clear();
-        delete varstack;
-    }
 };
 
 #if !defined(INTERPRETER_USE_LOOP) && !defined(INTERPRETER_USE_CGOTO)
@@ -949,14 +921,10 @@ int interpreter_core(const Program & programdata, int i)
         valpush((Func{s.funcs[n].loc, s.funcs[n].varcount}));
     
     INTERPRETER_MIDCASE(FuncEnd)
-        s.varstack->clear();
-        delete s.varstack;
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
     INTERPRETER_MIDCASE(Return)
-        s.varstack->clear();
-        delete s.varstack;
         s.varstack = vec_pop_back(s.varstacks);
         s.varstack_raw = s.varstack->data();
         i = vec_pop_back(s.callstack);
@@ -1177,12 +1145,6 @@ int interpreter_core(const Program & programdata, int i)
         Array * al = vl.as_array_ptr_thru_ref();
         for (auto & item : *ar->items())
             al->items()->push_back(item);
-        delete ar->info;
-    
-    INTERPRETER_MIDCASE(ArrayDelete)
-        auto v = valpop();
-        Array * a = v.as_array_ptr_thru_ref();
-        delete a->info;
     
     INTERPRETER_MIDCASE(StringLiteral)
         valpush(make_array(make_array_data(s.programdata.get_token_stringval(n))));

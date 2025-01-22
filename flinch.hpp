@@ -1,6 +1,8 @@
 #ifndef FLINCH_INCLUDE
 #define FLINCH_INCLUDE
 
+//#include <mimalloc-new-delete.h>
+
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -14,11 +16,22 @@
 #include <cassert>
 #include <initializer_list>
 
+/*
 #include <gc.h>
-#define malloc(X) GC_malloc_ignore_off_page((X))
+#define malloc(X) GC_malloc((X))
 #define free(X) GC_free((X))
 #define realloc(X, Y) GC_realloc((X), (Y))
-#define calloc(X, Y) GC_malloc_ignore_off_page((X)*(Y))
+#define calloc(X, Y) GC_malloc((X)*(Y))
+
+#include "nogc.h"
+*/
+
+#include "gc.hpp"
+
+#define malloc(X) gc_malloc((X))
+#define free(X) gc_free((X))
+#define realloc(X, Y) gc_realloc((X), (Y))
+#define calloc(X, Y) gc_malloc((X)*(Y))
 
 #ifndef NOINLINE
 #define NOINLINE __attribute__((noinline))
@@ -100,15 +113,16 @@ struct Func { iword_t loc, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
 struct DynamicType;
-typedef PODVec<DynamicType> * ArrayData;
+typedef Ptr(PODVec<DynamicType>) ArrayData;
 
 struct Ref {
-    DynamicType * info;
-    DynamicType * ref() { return info; }
+    Ptr(DynamicType) root;
+    size_t offs;
+    DynamicType * ref();
 };
 
-#define MAKEREF return Ref{&items->at(i)};
-#define MAKEREF2 return Ref{items->data() + i};
+#define MAKEREF return Ref{items->data(), (size_t)((&items->at(i))-items->data())};
+#define MAKEREF2 return Ref{items->data(), (size_t)((items->data() + i)-items->data())};
 
 struct Label { int loc; };
 struct Array {
@@ -119,46 +133,74 @@ struct Array {
 ArrayData & Array::items() { return info; }
 Array make_array(ArrayData backing) { return Array { backing }; }
 
-// DynamicType can hold any of these types
 struct DynamicType {
-    union {
+    union Variant {
         int64_t integer;
         double real;
         Label label;
         Func func;
         Ref ref;
         Array array;
+        uint8_t dummy[16];
     } v;
-    enum { INT, REAL, LABEL, FUNC, REF, ARRAY };
-    uint8_t f;
-
-    DynamicType()            { v.integer = (int64_t)0; f = INT; }
-    DynamicType(int64_t val) { v.integer = (int64_t)val; f = INT; }
-    DynamicType(int val)     { v.integer = (int64_t)val; f = INT; }
-    DynamicType(short val)   { v.integer = (int64_t)val; f = INT; }
-    DynamicType(char val)    { v.integer = (int64_t)val; f = INT; }
-    DynamicType(double val)  { v.real    = (double) val; f = REAL; }
-    DynamicType(const Label & l) { v.label = l; f = LABEL; }
-    DynamicType(const Func & fv) { v.func  = fv; f = FUNC; }
-    DynamicType(const Array & a) { v.array = a; f = ARRAY; }
-    DynamicType(const Ref & r)   { v.ref   = r; f = REF; }
-    DynamicType(Array && a)      { v.array = a; f = ARRAY; }
-    DynamicType(Ref && r)        { v.ref   = r; f = REF; }
-
-    DynamicType(const DynamicType & other) = default;
-    DynamicType(DynamicType && other) noexcept = default;
-    DynamicType& operator=(const DynamicType & other) = default;
-    DynamicType& operator=(DynamicType && other) noexcept = default;
+    enum { INT, REAL, LABEL, FUNC, ARRAY, REF = 0x80 };
+    const uint8_t & f() const { return ((uint8_t *)v.dummy)[15]; }
+    uint8_t & f() { return ((uint8_t *)v.dummy)[15]; }
+    
+    DynamicType()            { v.integer = (int64_t)0; f() = INT; }
+    DynamicType(int64_t val) { v.integer = (int64_t)val; f() = INT; }
+    DynamicType(int val)     { v.integer = (int64_t)val; f() = INT; }
+    DynamicType(short val)   { v.integer = (int64_t)val; f() = INT; }
+    DynamicType(char val)    { v.integer = (int64_t)val; f() = INT; }
+    DynamicType(double val)  { v.real    = (double) val; f() = REAL; }
+    DynamicType(const Label & l) { v.label = l; f() = LABEL; }
+    DynamicType(const Func & fv) { v.func  = fv; f() = FUNC; }
+    DynamicType(const Array & a) { v.array = a; f() = ARRAY; }
+    DynamicType(const Ref & r)   { v.ref   = r; f() = REF; }
+    DynamicType(Array && a)      { v.array = a; f() = ARRAY; }
+    DynamicType(Ref && r)        { v.ref   = r; f() = REF; }
+    
+    void _colorize_gc_ptrs()
+    {
+        if (f() == REF)
+            v.ref.root.colorize();
+        else if (f() == ARRAY)
+            v.array.info.colorize();
+    }
+    
+    DynamicType(const DynamicType & other)
+    {
+        memcpy(&v, &other.v, sizeof(Variant));
+        _colorize_gc_ptrs();
+    }
+    DynamicType(DynamicType && other)
+    {
+        memcpy(&v, &other.v, sizeof(Variant));
+        _colorize_gc_ptrs();
+    }
+    DynamicType & operator=(const DynamicType & other)
+    {
+        memcpy(&v, &other.v, sizeof(Variant));
+        _colorize_gc_ptrs();
+        return *this;
+    }
+    DynamicType & operator=(DynamicType && other)
+    {
+        //printf("%p %p %zu\n", &v, &other.v, sizeof(Variant));
+        memcpy(&v, &other.v, sizeof(Variant));
+        _colorize_gc_ptrs();
+        return *this;
+    }
     
     #define INFIX(WRAPPER1, WRAPPER2, OP, OP2, WX)\
-        if (f == INT && other.f == INT)\
+        if (f() == INT && other.f() == INT)\
             return WRAPPER1(WX(v.integer) OP WX(other.v.integer));\
-        else if (f == REAL && other.f == REAL)\
-            return WRAPPER2(WX(v.real) OP2 WX(other.v.integer));\
-        else if (f == INT && other.f == REAL)\
-            return WRAPPER2(WX(v.integer) OP2 WX(other.v.real));\
-        else if (f == REAL && other.f == INT)\
+        else if (f() == REAL && other.f() == REAL)\
             return WRAPPER2(WX(v.real) OP2 WX(other.v.real));\
+        else if (f() == INT && other.f() == REAL)\
+            return WRAPPER2(WX(v.integer) OP2 WX(other.v.real));\
+        else if (f() == REAL && other.f() == INT)\
+            return WRAPPER2(WX(v.real) OP2 WX(other.v.integer));\
         else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP);
     
     #define COMMA ,
@@ -187,9 +229,9 @@ struct DynamicType {
     bool operator||(const DynamicType& other) const { INFIX(!!, !!, ||, ||, ) }
     
     #define UNARY(WRAPPER, OP, WX)\
-        if (f == INT)\
+        if (f() == INT)\
             return WRAPPER(OP WX(v.integer));\
-        else if (f == REAL)\
+        else if (f() == REAL)\
             return WRAPPER(OP WX(v.real));\
         else THROWSTR("Unsupported operation: non-numeric operands for operator " #OP);
     
@@ -200,7 +242,7 @@ struct DynamicType {
     #define AS_TYPE_X(RETTYPE, TYPE, WHICH, TYPENAME)\
     RETTYPE & as_##TYPENAME()\
     {\
-        if (f == TYPE) return v.WHICH;\
+        if (f() == TYPE) return v.WHICH;\
         THROWSTR("Value is not of type " #TYPENAME);\
     }
     
@@ -211,12 +253,12 @@ struct DynamicType {
     AS_TYPE_X(Func   , FUNC , func   , func)
     AS_TYPE_X(Array  , ARRAY, array  , array)
     
-    bool is_int()    { return f == INT; }
-    bool is_double() { return f == REAL; }
-    bool is_ref()    { return f == REF; }
-    bool is_label()  { return f == LABEL; }
-    bool is_func()   { return f == FUNC; }
-    bool is_array()  { return f == ARRAY; }
+    bool is_int()    const { return f() == INT; }
+    bool is_double() const { return f() == REAL; }
+    bool is_ref()    const { return f() == REF; }
+    bool is_label()  const { return f() == LABEL; }
+    bool is_func()   const { return f() == FUNC; }
+    bool is_array()  const { return f() == ARRAY; }
     
     int64_t as_into_int()
     {
@@ -234,13 +276,17 @@ struct DynamicType {
         
     explicit operator bool() const
     {
-        if (f == INT) return v.integer;
-        else if (f == REAL) return v.real;
+        if (is_int()) return !!v.integer;
+        else if (is_double()) return !!v.real;
         return true;
     }
     
     DynamicType clone(bool deep);
 };
+
+// the "and" gets optimized away because the affected bit is multiplied out
+// but it's necessary because adding an out-of-range offset would be UB
+DynamicType * Ref::ref() { return root+(offs & 0x7FFFFFFFFFFFFFFF); }
 
 ArrayData make_array_data(PODVec<DynamicType> x)
 {
@@ -249,7 +295,7 @@ ArrayData make_array_data(PODVec<DynamicType> x)
     return ret;
 }
 ArrayData make_array_data() { return ArrayData(calloc(1, sizeof(PODVec<DynamicType>))); }
-    
+
 DynamicType DynamicType::clone(bool deep)
 {
     if (is_ref()) return *as_ref().ref();
@@ -829,11 +875,11 @@ struct ProgramState {
     PODVec<iword_t> callstack;
     
     ArrayData globals;
-    DynamicType * globals_raw;
+    Ptr(DynamicType) globals_raw;
     
     PODVec<ArrayData> varstacks;
     ArrayData varstack;
-    DynamicType * varstack_raw;
+    Ptr(DynamicType) varstack_raw;
     
     PODVec<PODVec<DynamicType>> evalstacks;
     PODVec<DynamicType> evalstack;
@@ -847,7 +893,7 @@ extern const HandlerInfo handler;
 
 int interpreter_core(const Program & programdata, int i)
 {
-    auto program = programdata.program.data();
+    auto program = programdata.program.data() + 0;
     
     PODVec<DynamicType> vars_default;
     for (size_t i = 0; i < programdata.token_varnames.size(); i++) vars_default.push_back(0);
@@ -1193,7 +1239,9 @@ const HandlerInfo handler = { TOKEN_TABLE };
 
 int interpret(const Program & programdata)
 {
+    gc_start();
     interpreter_core(programdata, 0);
+    gc_end();
     return 0;
 }
 

@@ -1,6 +1,7 @@
-inline void * safe_realloc(void * ptr, size_t len)
+template<typename T>
+inline Ptr(T) safe_realloc(Ptr(T) ptr, size_t len)
 {
-    if (!ptr) return malloc(len);
+    if (!ptr) return PtrCast(T, malloc(len));
     if (len == 0) { free(ptr); return 0; }
     return realloc(ptr, len);
 }
@@ -157,7 +158,7 @@ ShortString operator+(const char * other, const ShortString & right)
 template<typename T, int growth_factor = 20> // growth factor is out of 10. a value of 20 means 2x. must be at least 11.
 struct PODVec
 {
-    T * mbuffer = 0;
+    Ptr(T) mbuffer = 0;
     size_t mlength = 0;
     size_t mcapacity = 0;
     
@@ -165,7 +166,7 @@ struct PODVec
     PODVec(size_t count, const T & value = T())
     {
         mlength = count;
-        mbuffer = (T *)malloc(sizeof(T) * mlength);
+        mbuffer = PtrCast(T, malloc(sizeof(T) * mlength));
         for (size_t i = 0; i < count; i++)
             mbuffer[i] = value;
     }
@@ -174,9 +175,12 @@ struct PODVec
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
-            mbuffer = (T *)malloc(sizeof(T) * mcapacity);
+            mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
         if (mbuffer)
-            memcpy(mbuffer, other.mbuffer, sizeof(T) * mlength);
+        {
+            for (size_t i = 0; i < mlength; i++)
+                mbuffer[i] = other.mbuffer[i];
+        }
     }
     PODVec(PODVec && other)
     {
@@ -193,9 +197,12 @@ struct PODVec
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
-            mbuffer = (T *)malloc(sizeof(T) * mlength);
+            mbuffer = PtrCast(T, malloc(sizeof(T) * mlength));
         if (mbuffer)
-            memcpy(mbuffer, other.mbuffer, sizeof(T) * mlength);
+        {
+            for (size_t i = 0; i < mlength; i++)
+                mbuffer[i] = other.mbuffer[i];
+        }
         return *this;
     }
     PODVec & operator=(PODVec && other)
@@ -209,19 +216,19 @@ struct PODVec
     
     size_t size() const noexcept { return mlength; }
     size_t capacity() const noexcept { return mlength; }
-    T * data() noexcept { return (T*)mbuffer; }
-    const T * data() const noexcept { return (T*)mbuffer; }
-    T * begin() noexcept { return (T*)mbuffer; }
-    T * end() noexcept { return ((T*)mbuffer) + mlength; }
-    const T * begin() const noexcept { return (T*)mbuffer; }
-    const T * end() const noexcept { return ((T*)mbuffer) + mlength; }
+    Ptr(T) data() noexcept { return mbuffer; }
+    const Ptr(T) data() const noexcept { return mbuffer; }
+    T * begin() noexcept { return mbuffer + 0; }
+    T * end() noexcept { return mbuffer + mlength; }
+    const T * begin() const noexcept { return mbuffer + 0; }
+    const T * end() const noexcept { return mbuffer + mlength; }
     T & front() noexcept { return mbuffer[0]; }
     T & back() noexcept { return mbuffer[mlength-1]; }
     const T & front() const noexcept { return mbuffer[0]; }
     const T & back() const noexcept { return mbuffer[mlength-1]; }
     
-    const T & operator[](size_t pos) const noexcept { return ((T*)mbuffer)[pos]; }
-    T & operator[](size_t pos) noexcept { return ((T*)mbuffer)[pos]; }
+    const T & operator[](size_t pos) const noexcept { return mbuffer[pos]; }
+    T & operator[](size_t pos) noexcept { return mbuffer[pos]; }
     constexpr bool operator==(const PODVec<T> & other) const
     {
         if (other.mlength != mlength)
@@ -233,8 +240,8 @@ struct PODVec
         }
         return true;
     }
-    const T & at(size_t pos) const noexcept { assert(pos < mlength); return ((T*)mbuffer)[pos]; }
-    T & at(size_t pos) noexcept { assert(pos < mlength); return ((T*)mbuffer)[pos]; }
+    const T & at(size_t pos) const noexcept { assert(pos < mlength); return mbuffer[pos]; }
+    T & at(size_t pos) noexcept { assert(pos < mlength); return mbuffer[pos]; }
     
     void push_back(const T & item)
     {
@@ -245,7 +252,7 @@ struct PODVec
         if (mlength > mcapacity) mcapacity = mlength;
     
         if (mcapacity != oldcap)
-            mbuffer = (T *)safe_realloc(mbuffer, sizeof(T) * mcapacity);
+            do_realloc(oldcap);
         
         memset(mbuffer + (mlength-1), 0, sizeof(T));
         mbuffer[mlength-1] = item;
@@ -259,12 +266,10 @@ struct PODVec
         if (mlength > mcapacity) mcapacity = mlength;
     
         if (mcapacity != oldcap)
-            mbuffer = (T *)safe_realloc(mbuffer, sizeof(T) * mcapacity);
+            do_realloc(oldcap);
         
-        //memcpy(mbuffer + (mlength-1), &item, sizeof(T));
         memset(mbuffer + (mlength-1), 0, sizeof(T));
         mbuffer[mlength-1] = std::move(item);
-        //memset(&item, 0, sizeof(T));
     }
     T pop_back()
     {
@@ -272,6 +277,18 @@ struct PODVec
         T ret = std::move(mbuffer[mlength]);
         memset(mbuffer + mlength, 0, sizeof(T));
         return ret;
+    }
+    
+    void do_realloc(size_t oldcap)
+    {
+        auto newly = PtrCast(T, malloc(sizeof(T) * mcapacity));
+        size_t s = oldcap;
+        if (mcapacity < s)
+            s = mcapacity;
+        for (size_t i = 0; i < s; i++)
+            newly[i] = mbuffer[i];
+        free(mbuffer);
+        mbuffer = newly;
     }
     
     NOINLINE void insert_at(size_t i, T && item)
@@ -283,19 +300,19 @@ struct PODVec
         if (mlength > mcapacity) mcapacity = mlength;
         
         if (mcapacity != oldcap)
-            mbuffer = (T *)safe_realloc(mbuffer, sizeof(T) * mcapacity);
+            do_realloc(oldcap);
         
         memset(mbuffer + (mlength-1), 0, sizeof(T));
-        memmove(mbuffer + i + 1, mbuffer + i, (mlength - i - 1) * sizeof(T));
+        for (size_t j = mlength-1; j > i; j--)
+            mbuffer[j] = mbuffer[j-1];
         
-        //memcpy(mbuffer + i, &item, sizeof(T));
         memset(mbuffer + i, 0, sizeof(T));
         mbuffer[i] = std::move(item);
-        //memset(&item, 0, sizeof(T));
     }
     NOINLINE void erase_at(size_t i)
     {
-        memmove(mbuffer + i, mbuffer + i + 1, (mlength - i - 1) * sizeof(T));
+        for (size_t j = i; j + 1 < mlength; j++)
+            mbuffer[j] = mbuffer[j+1];
         mlength -= 1;
         memset(mbuffer + mlength, 0, sizeof(T));
     }
@@ -311,7 +328,8 @@ struct Pair {
     Pair(T0 && a, T1 && b) : _0(std::move(a)), _1(std::move(b)) { }
     Pair(const T0 & a, T1 && b) : _0(a), _1(std::move(b)) { }
     Pair(T0 && a, const T1 & b) : _0(std::move(a)), _1(b) { }
-    Pair & operator==(const Pair & other) const
+    //Pair & operator==(const Pair & other) const
+    bool operator==(const Pair & other) const
     {
         return _0 == other._0 && _1 == other._1;
     }

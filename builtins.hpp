@@ -21,7 +21,7 @@ void f_print_inner(DynamicType * val)
     else if (val->is_ref())
     {
         printf("&");
-        f_print_inner(val->as_ref().ref());
+        f_print_inner(val->as_ref().ref()+0);
     }
 }
 void f_print(PODVec<DynamicType> & stack)

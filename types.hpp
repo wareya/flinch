@@ -193,7 +193,8 @@ struct PODVec
     
     NOINLINE PODVec & operator=(const PODVec & other)
     {
-        if (mbuffer) free(mbuffer); mbuffer = 0;
+        if (mbuffer) free(mbuffer);
+        mbuffer = 0;
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
@@ -207,7 +208,8 @@ struct PODVec
     }
     PODVec & operator=(PODVec && other)
     {
-        if (mbuffer) free(mbuffer); mbuffer = 0;
+        if (mbuffer) free(mbuffer);
+        mbuffer = 0;
         mbuffer = other.mbuffer; other.mbuffer = 0;
         mlength = other.mlength; other.mlength = 0;
         mcapacity = other.mcapacity; other.mcapacity = 0;

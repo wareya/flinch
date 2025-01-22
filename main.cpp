@@ -1,3 +1,4 @@
+#include <mimalloc.h>
 
 #include <cstdio>
 #include <string>

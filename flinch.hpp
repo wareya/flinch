@@ -1,8 +1,6 @@
 #ifndef FLINCH_INCLUDE
 #define FLINCH_INCLUDE
 
-//#include <mimalloc-new-delete.h>
-
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -26,6 +24,10 @@
 #include "nogc.h"
 */
 
+#ifndef NOINLINE
+#define NOINLINE __attribute__((noinline))
+#endif
+
 #include "gc.hpp"
 
 #define malloc(X) gc_malloc((X))
@@ -33,9 +35,6 @@
 #define realloc(X, Y) gc_realloc((X), (Y))
 #define calloc(X, Y) gc_malloc((X)*(Y))
 
-#ifndef NOINLINE
-#define NOINLINE __attribute__((noinline))
-#endif
 
 //#define THROWSTR(X) throw std::runtime_error(X)
 //#define THROWSTR(X) throw (X)
@@ -160,6 +159,7 @@ struct DynamicType {
     DynamicType(Array && a)      { v.array = a; f() = ARRAY; }
     DynamicType(Ref && r)        { v.ref   = r; f() = REF; }
     
+    /*
     void _colorize_gc_ptrs()
     {
         if (f() == REF)
@@ -186,11 +186,11 @@ struct DynamicType {
     }
     DynamicType & operator=(DynamicType && other)
     {
-        //printf("%p %p %zu\n", &v, &other.v, sizeof(Variant));
         memcpy(&v, &other.v, sizeof(Variant));
         _colorize_gc_ptrs();
         return *this;
     }
+    */
     
     #define INFIX(WRAPPER1, WRAPPER2, OP, OP2, WX)\
         if (f() == INT && other.f() == INT)\

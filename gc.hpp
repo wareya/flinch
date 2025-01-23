@@ -1,24 +1,69 @@
 #include <mutex>
 #include <atomic>
+#include <thread>
 #include <assert.h>
 
-static std::mutex _gc_mutex;
+#define WIN32_LEAN_AND_MEAN
+#define VC_EXTRALEAN
+#include <windows.h>
 
-enum { GC_COLOR, GC_SIZE, GC_P_START, GC_P_END };
+std::mutex safepoint_mutex;
+int _gc_m_d_m_d() { safepoint_mutex.lock(); return 0; }
+int _mutex_dummy = _gc_m_d_m_d();
+
+static size_t _main_thread = 0;
+static std::thread::id main_thread_id = std::this_thread::get_id();
+static inline void enforce_not_main_thread()
+{
+    return;
+    int x = main_thread_id != std::this_thread::get_id();
+    if (!x)
+    {
+        printf("ERROR!!!!!!!!");
+        fflush(stdout);
+    }
+    assert(x);
+}
+static inline void enforce_yes_main_thread()
+{
+    return;
+    int x = main_thread_id == std::this_thread::get_id();
+    if (!x)
+    {
+        printf("error.............");
+        fflush(stdout);
+    }
+    assert(x);
+}
+
+enum { GC_COLOR, GC_SIZE, GC_NEXT };
 enum { GC_GREY, GC_WHITE, GC_BLACK };
-#define GCOFFS 64
+#define GCOFFS_W 8
+#define GCOFFS (sizeof(size_t *)*GCOFFS_W)
 
 static inline void _gc_set_color(char * p, uint8_t color)
 {
+    assert(((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].is_lock_free());
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    
     //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_release);
-    ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color);
+    ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_seq_cst);
+    //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color);
     //((uint8_t *)(p-GCOFFS))[GC_COLOR] = color;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 static inline uint8_t _gc_get_color(char * p)
 {
-    //return ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_acquire);
-    return ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load();
-    //return ((uint8_t *)(p-GCOFFS))[GC_COLOR];
+    assert(((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].is_lock_free());
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    
+    //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_acquire);
+    auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_seq_cst);
+    //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load();
+    //auto ret = ((uint8_t *)(p-GCOFFS))[GC_COLOR];
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    
+    return ret;
 }
 
 struct GcListNode {
@@ -28,6 +73,7 @@ struct GcListNode {
 static GcListNode * gc_gc_freelist = 0;
 static inline void _gc_list_push(GcListNode ** table, char * val, GcListNode ** freelist)
 {
+    enforce_not_main_thread();
     GcListNode * newly;
     if (*freelist)
     {
@@ -42,6 +88,7 @@ static inline void _gc_list_push(GcListNode ** table, char * val, GcListNode ** 
 }
 static inline char * _gc_list_pop(GcListNode ** table, GcListNode ** freelist)
 {
+    enforce_not_main_thread();
     auto node = *table;
     *table = node->next;
     
@@ -50,142 +97,17 @@ static inline char * _gc_list_pop(GcListNode ** table, GcListNode ** freelist)
     return node->val;
 }
 
-template<typename T>
-struct GcPtr {
-    T * p;
-    
-    template <typename U, typename = std::enable_if_t<!std::is_same_v<T, U>>>
-    GcPtr(const GcPtr<U> & y) : p((T *)y.p)
-    {
-        colorize();
-    }
-    GcPtr(const GcPtr<T> & y) : p(y.p)
-    {
-        colorize();
-    }
-    GcPtr() = default;
-    ~GcPtr() = default;
-    
-    GcPtr(void * x) { p = (T *)x; }
-    
-    GcPtr<T> & operator=(void * x) { p = (T *)x; return *this; }
-    
-    template<typename U>
-    T * operator+(U x) const { return p + x; }
-    
-    ptrdiff_t operator-(GcPtr<T> x) const { return p - x.p; }
-
-    T & operator*() { return *p; }
-    T * operator->() { return p; }
-
-    const T & operator*() const { return *p; }
-    const T * operator->() const { return p; }
-    
-    const T & operator[](const size_t i) const { return p[i]; }
-    T & operator[](const size_t i) { return p[i]; }
-    
-    bool operator==(const GcPtr<T> & other) const { return p == other.p; }
-    
-    void colorize()
-    {
-        //if (p) _gc_set_color((char *)p, GC_GREY);
-    }
-    GcPtr<T> & operator=(const GcPtr<T> & y)
-    {
-        p = y.p;
-        colorize();
-        return *this;
-    }
-    GcPtr<T> & operator=(GcPtr<T> && y)
-    {
-        p = y.p;
-        colorize();
-        return *this;
-    }
-    operator bool() const { return !!p; }
-    //operator T*() const { return p; }
-    //operator void*() const { return (void *)p; }
-};
-  
-template<typename U, typename T>
-ptrdiff_t operator-(U a, GcPtr<T> b) { return a - b.p; }
-
-template<typename T>
-GcPtr<T> memcpy(GcPtr<T> ptr, const void * source, size_t num)
-{
-    memcpy(ptr.p, source, num);
-    return ptr;
-}
-template<typename T>
-GcPtr<T> memcpy(GcPtr<T> ptr, GcPtr<T> source, size_t num)
-{
-    memcpy(ptr.p, source.p, num);
-    return ptr;
-}
-
-template<typename T>
-GcPtr<T> memset(GcPtr<T> ptr, int value, size_t num)
-{
-    memset((void *)ptr.p, value, num);
-    return ptr;
-}
-
-#include <bit>
-
-#define RAWMALLOC
-
-static GcListNode * _malloc_freelist_freelist = 0;
-static GcListNode * _malloc_freelists[64] = {};
-static size_t _malloc_freelist_lens[64] = {};
-static std::mutex _malloc_mutex;
 static inline void * _malloc(size_t n)
 {
-#ifdef RAWMALLOC
+    if (_main_thread != 0)
+        enforce_yes_main_thread();
     return malloc(n);
-#else
-    if (n >= 0x8000000000000000UL)
-        return 0;
-    n = std::bit_ceil(n);
-    size_t l2 = std::countr_zero(n);
-    _malloc_mutex.lock();
-    if (_malloc_freelists[l2])
-    {
-        _malloc_freelist_lens[l2] -= 1;
-        auto ret = _gc_list_pop(_malloc_freelists + l2, &_malloc_freelist_freelist);
-        _malloc_mutex.unlock();
-        return ret;
-    }
-    _malloc_mutex.unlock();
-    return malloc(n);
-#endif
 }
 static inline void _free(void * p)
 {
-#ifdef RAWMALLOC
+    enforce_not_main_thread();
     free(p);
-#else
-    size_t n = ((size_t *)p)[GC_SIZE];
-    n = std::bit_ceil(n);
-    size_t l2 = std::countr_zero(n);
-    _malloc_mutex.lock();
-    if ((_malloc_freelist_lens[l2]+1) << l2 > 0x4000)
-    {
-        _malloc_mutex.unlock();
-        free(p);
-    }
-    else
-    {
-        _malloc_freelist_lens[l2] += 1;
-        _gc_list_push(_malloc_freelists + l2, (char *)p, &_malloc_freelist_freelist);
-        _malloc_mutex.unlock();
-    }
-#endif
 }
-
-//#define Ptr(X) GcPtr<X>
-//#define PtrCast(X, Y) GcPtr<X>{Y}
-//#define PtrBase(X) X.p
-//#define ISTEMPLATE 1
 
 #define Ptr(X) X *
 #define PtrCast(X, Y) (X *)(Y)
@@ -196,8 +118,6 @@ static inline void _free(void * p)
 #define T_TYPE_M void
 #endif
 
-static inline void _gc_lock() { _gc_mutex.lock(); }
-static inline void _gc_unlock() { _gc_mutex.unlock(); }
 
 //#define GC_TABLE_HASH(X) (((((X)+1)*123454321)>>6)&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((((X)+1)*123454321)>>5)&(GC_TABLE_SIZE - 1))
@@ -208,25 +128,26 @@ static inline void _gc_unlock() { _gc_mutex.unlock(); }
 //#define GC_TABLE_HASH(X) ((((X)>>8)^(X))&(GC_TABLE_SIZE - 1))
 #define GC_TABLE_HASH(X) (((X)>>5)&(GC_TABLE_SIZE - 1))
 
-//static size_t GC_TABLE_SIZE = (1ULL<<22ULL);
 static size_t GC_TABLE_BITS = 16ULL;
 static size_t GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
-static GcListNode ** gc_table = (GcListNode **)calloc(GC_TABLE_SIZE, sizeof(GcListNode *));
+static size_t *** gc_table = (size_t ***)calloc(GC_TABLE_SIZE, sizeof(size_t **));
 
-static inline void _gc_table_push(char * p)
+static inline void _gc_table_push(char * _p)
 {
-    p += GCOFFS;
-    //printf("adding %p...\n", (void *)p);
+    enforce_not_main_thread();
+    char * p = _p+GCOFFS;
     size_t k = GC_TABLE_HASH((uintptr_t)p);
-    auto table = &gc_table[k];
-    _gc_list_push(table, p, &gc_gc_freelist);
+    
+    ((size_t ***)_p)[GC_NEXT] = gc_table[k];
+    gc_table[k] = ((size_t **)p);
 }
-static inline GcListNode * _gc_table_get(char * p)
+static inline size_t ** _gc_table_get(char * p)
 {
+    enforce_not_main_thread();
     size_t k = GC_TABLE_HASH((uintptr_t)p);
-    GcListNode * next = gc_table[k];
-    while (next && next->val != p)
-        next = next->next;
+    size_t ** next = gc_table[k];
+    while (next && next != (size_t **)p)
+        next = ((size_t ***)(next-GCOFFS_W))[GC_NEXT];
     return next;
 }
 
@@ -241,57 +162,65 @@ _GcCmdlist gc_cmd2; // read
 
 static std::mutex gc_cmdlist_mtx;
 
+static inline void gc_safepoint_lock()
+{
+    //std::atomic_thread_fence(std::memory_order_seq_cst);
+    safepoint_mutex.lock();
+}
+static inline void gc_safepoint_unlock()
+{
+    //std::atomic_thread_fence(std::memory_order_seq_cst);
+    safepoint_mutex.unlock();
+}
+static inline void gc_safepoint()
+{
+    //std::atomic_thread_fence(std::memory_order_seq_cst);
+    safepoint_mutex.unlock();
+    safepoint_mutex.lock();
+}
+
 NOINLINE static inline Ptr(char) gc_malloc(size_t n)
 {
+    gc_safepoint();
+    
     if (!n) return PtrCast(char, 0);
-    char * p = (char *)_malloc(n+GCOFFS);
-    //printf("got %p from malloc\n", p);
-    if (!p) return PtrCast(char, 0);
-    std::atomic_thread_fence(std::memory_order_seq_cst);
     gc_cmdlist_mtx.lock();
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+        char * p = (char *)_malloc(n+GCOFFS);
+        
+        if (!p) return gc_cmdlist_mtx.unlock(), PtrCast(char, 0);
+        
         memset(p, 0, n+GCOFFS);
-        ((size_t *)p)[GC_SIZE] = n;
+        ((std::atomic_size_t *)p)[GC_SIZE] = n;
         _gc_set_color(p+GCOFFS, GC_GREY);
+        ((std::atomic_size_t *)p)[GC_NEXT] = 0;
         if (gc_cmd.len >= gc_cmd.cap)
         {
             gc_cmd.cap <<= 1;
-            std::atomic_thread_fence(std::memory_order_seq_cst);
             gc_cmd.list = (char **)realloc(gc_cmd.list, gc_cmd.cap * sizeof(char *));
-            std::atomic_thread_fence(std::memory_order_seq_cst);
         }
         gc_cmd.list[gc_cmd.len] = p;
         gc_cmd.len += 1;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+        
+        auto ret = PtrCast(char, p+GCOFFS);
     gc_cmdlist_mtx.unlock();
-    std::atomic_thread_fence(std::memory_order_seq_cst);
     
-    return PtrCast(char, p+GCOFFS);
+    return ret;
 }
 
 
 static inline Ptr(char) gc_calloc(size_t c, size_t n)
 {
+    gc_safepoint();
     return gc_malloc(c*n);
 }
 
 #if ISTEMPLATE
 template<typename T_TYPE_M>
 #endif
-//static inline void gc_free(Ptr(T_TYPE_M) _p)
 static inline void gc_free(Ptr(T_TYPE_M))
 {
+    gc_safepoint();
     return;
-    /*
-    char * p = (char *)PtrBase(_p);
-    if (!p) return;
-    p -= GCOFFS;
-    
-    _gc_lock();
-        _gc_table_remove(p);
-        free((char *)p);
-    _gc_unlock();
-    */
 }
 
 #if ISTEMPLATE
@@ -300,6 +229,7 @@ template<typename T_TYPE_M>
 static inline Ptr(T_TYPE_M) gc_realloc(Ptr(T_TYPE_M) _p, size_t n)
 {
     char * p = (char *)PtrBase(_p);
+    char * volatile __p = p;
     #if ISTEMPLATE
     if (!p) return PtrCast(T_TYPE_M, gc_malloc(n));
     #else
@@ -307,69 +237,54 @@ static inline Ptr(T_TYPE_M) gc_realloc(Ptr(T_TYPE_M) _p, size_t n)
     #endif
     if (n == 0) { gc_free(_p); return PtrCast(T_TYPE_M, 0); }
     
-    p -= GCOFFS;
+    _gc_set_color(p, GC_GREY);
     
     auto x = PtrCast(T_TYPE_M, gc_malloc(n));
     assert(x);
-    size_t size2 = ((size_t *)p)[GC_SIZE];
+    size_t size2 = ((size_t *)(p-GCOFFS))[GC_SIZE];
     memcpy(x, _p, n < size2 ? n : size2);
-    return x;
-    /*
-    _gc_lock();
-        _gc_set_color(p+GCOFFS, GC_GREY);
-        char * p2 = (char *)realloc(p, n+GCOFFS);
-        if (!p2) return _gc_table_remove(p), _gc_unlock(), PtrCast(T_TYPE_M, 0);
-        ((size_t *)p2)[GC_SIZE] = n;
-        _gc_table_replace(p, p2);
-    _gc_unlock();
     
-    if (!p2) return PtrCast(T_TYPE_M, 0);
-    return PtrCast(T_TYPE_M, p2+GCOFFS);
-    */
+    _gc_set_color(p, GC_GREY);
+    
+    gc_safepoint();
+    
+    __p = __p;
+    return x;
 }
 
-#define WIN32_LEAN_AND_MEAN
-#define VC_EXTRALEAN
-#include <windows.h>
-
-static size_t _main_thread = 0;
 static size_t _main_stack_hi = 0;
-static inline int gc_run_startup()
+static inline void gc_run_startup()
 {
+    if (_main_thread != 0)
+        return;
+    
     HANDLE h;
     auto cprc = GetCurrentProcess();
     auto cthd = GetCurrentThread();
-    auto retcode = DuplicateHandle(cprc, cthd, cprc, &h, 0, FALSE, DUPLICATE_SAME_ACCESS);
-    assert(retcode);
+    assert(DuplicateHandle(cprc, cthd, cprc, &h, 0, FALSE, DUPLICATE_SAME_ACCESS));
     _main_thread = (size_t)h;
+    
     printf("got main thread! %zd\n", _main_thread);
     
     ULONGLONG lo;
     ULONGLONG hi;
     GetCurrentThreadStackLimits(&lo, &hi);
     _main_stack_hi = (size_t)hi;
-    
-    return 0;
 }
-static int _gc_unused_dummy = gc_run_startup();
 
 static std::atomic_int _gc_stop = 0;
-static size_t _gc_thread = 0;
-
-static inline void _gc_acquire();
-static inline void _gc_release();
 
 static size_t _gc_scan_word_count = 0;
 #define _GC_SCAN(start, end, rootlist)\
 {\
     while (start != end)\
     {\
-        auto v = _gc_table_get((char *)(*start));\
+        char * v = (char *)_gc_table_get((char *)(*start));\
         _gc_scan_word_count += 1;\
-        if (v && _gc_get_color(v->val) != GC_BLACK)\
+        if (v && _gc_get_color(v) != GC_BLACK)\
         {\
-            _gc_set_color(v->val, GC_GREY);\
-            _gc_list_push(rootlist, v->val, &gc_gc_freelist);\
+            _gc_set_color(v, GC_GREY);\
+            _gc_list_push(rootlist, v, &gc_gc_freelist);\
         }\
         start += 1;\
     }\
@@ -389,13 +304,41 @@ void _gc_scan_stack(uintptr_t * stack, uintptr_t * stack_top, GcListNode ** root
 
 #include <chrono>
 static inline double get_time() {
-    auto now = std::chrono::steady_clock::now();
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    auto now = std::chrono::high_resolution_clock::now();
     auto duration = now.time_since_epoch();
-    return std::chrono::duration<double>(duration).count();
+    double ret = std::chrono::duration<double>(duration).count();
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    return ret;
+}
+
+std::vector<void *> _disposal_list;
+std::mutex _disposal_list_mtx;
+
+static inline unsigned long int _disposal_loop(void *)
+{
+    while (1)
+    {
+        Sleep(1);
+        if (_gc_stop)
+            return 0;
+        
+        _disposal_list_mtx.lock();
+        gc_cmdlist_mtx.lock();
+        while (_disposal_list.size())
+        {
+            free(_disposal_list.back());
+            _disposal_list.pop_back();
+        }
+        _disposal_list = {};
+        gc_cmdlist_mtx.unlock();
+        _disposal_list_mtx.unlock();
+    }
 }
 
 static double max_pause_time = 0.0;
 static double wasted_seconds = 0.0;
+static double secs_cmdswap = 0.0;
 static double secs_cmd = 0.0;
 static double secs_whiten = 0.0;
 static double secs_roots = 0.0;
@@ -403,7 +346,7 @@ static double secs_mark = 0.0;
 static double secs_sweep = 0.0;
 static inline unsigned long int _gc_loop(void *)
 {
-    bool silent = false;
+    bool silent = true;
     while (1)
     {
         Sleep(1);
@@ -413,54 +356,66 @@ static inline unsigned long int _gc_loop(void *)
         if (!silent) puts("-- starting GC cycle");
         if (!silent) fflush(stdout);
         
+        /////
+        ///// receive hashtable update commands from main thread phase
+        /////
+        
+        gc_safepoint_lock();
         // swap cmd buffers, while preventing main thread from accessing them
-        double start_time = get_time();
-        std::atomic_thread_fence(std::memory_order_seq_cst);
         gc_cmdlist_mtx.lock();
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        double start_time = get_time();
             auto temp = gc_cmd;
             gc_cmd = gc_cmd2;
             gc_cmd2 = temp;
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        double pause_time = get_time() - start_time;
         gc_cmdlist_mtx.unlock();
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        wasted_seconds += get_time() - start_time;
+        
+        wasted_seconds += pause_time;
+        secs_cmdswap += pause_time;
+        
+        if (pause_time > max_pause_time) max_pause_time = pause_time;
+        
+        /////
+        ///// hashtable pre-processing phase
+        /////
+        
+        // gc_safepoint_unlock();
         
         // process received cmd buffer
+        start_time = get_time();
         for (size_t i = 0; i < gc_cmd2.len; i++)
-            _gc_table_push(gc_cmd2.list[i]);
+        {
+            char * c = gc_cmd2.list[i];
+            _gc_table_push(c);
+            _gc_set_color(c+GCOFFS, GC_GREY);
+        }
         gc_cmd2.len = 0;
         if (!silent) puts("commands processed");
-        
         secs_cmd += get_time() - start_time;
         
-        // suspend main thread
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        gc_cmdlist_mtx.lock();
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-            DWORD rval = SuspendThread((HANDLE)_main_thread);
-            assert(rval != (DWORD)-1);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        gc_cmdlist_mtx.unlock();
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        // gc_safepoint_lock();
+        
+        /////
+        ///// initial coloring phase
+        /////
         
         // whitening
-        start_time = get_time();
-        
         size_t filled_num = 0;
         size_t n2 = 0;
         for (size_t k = 0; k < GC_TABLE_SIZE; k++)
         {
-            GcListNode * next = gc_table[k];
+            size_t ** next = gc_table[k];
             if (next)
                 filled_num += 1;
             while (next)
             {
-                _gc_set_color(next->val, GC_WHITE);
-                next = next->next;
+                _gc_set_color((char *)next, GC_WHITE);
+                next = ((size_t ***)(next-GCOFFS_W))[GC_NEXT];
                 n2 += 1;
             }
         }
+        if (!silent) puts("whitening done");
+        
         secs_whiten += get_time() - start_time;
         
         auto cr = (n2-filled_num)/double(filled_num);
@@ -470,7 +425,24 @@ static inline unsigned long int _gc_loop(void *)
         auto fillrate = filled_num/double(GC_TABLE_SIZE);
         if (!silent) printf("bin fill rate: %.04f%%\n", fillrate*100.0);
         
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        //gc_safepoint_unlock();
+        
+        if (!silent) puts("-- swapped");
+        
+        /////
+        ///// root collection phase
+        /////
+        
+        //gc_safepoint_lock();
+        
+        // suspend main thread to read its registers and stack
+        gc_cmdlist_mtx.lock();
+            DWORD rval = SuspendThread((HANDLE)_main_thread);
+            int nx = 100000;
+            while (rval == (DWORD)-1 && nx-- > 0)
+                rval = SuspendThread((HANDLE)_main_thread);
+            assert(rval != (DWORD)-1);
+        gc_cmdlist_mtx.unlock();
         
         start_time = get_time();
         
@@ -483,31 +455,21 @@ static inline unsigned long int _gc_loop(void *)
         uintptr_t c_size = sizeof(CONTEXT)/sizeof(uintptr_t);
         _gc_scan(c, c+c_size, &rootlist);
         
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        
         uintptr_t * stack = (uintptr_t *)(ctx.Rsp / 8 * 8);
         uintptr_t * stack_top = (uintptr_t *)_main_stack_hi;
         _gc_scan_stack(stack, stack_top, &rootlist);
         
-        /*
-        size_t n = 0;
-        while (rootlist)
-        {
-            _gc_list_pop(&rootlist);
-        }
-        printf("number of found roots: %zd\n", n);
-        */
         if (!silent) printf("found roots\n");
         if (!silent) fflush(stdout);
         
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        
-        auto pause_time = get_time() - start_time;
+        pause_time = get_time() - start_time;
         wasted_seconds += pause_time;
         secs_roots += pause_time;
-        if (pause_time > max_pause_time) pause_time = max_pause_time;
+        if (pause_time > max_pause_time) max_pause_time = pause_time;
         
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        /////
+        ///// mark phase
+        /////
         
         _gc_scan_word_count = 0;
         
@@ -519,59 +481,86 @@ static inline unsigned long int _gc_loop(void *)
             uintptr_t * base = (uintptr_t *)(ptr-GCOFFS);
             size_t size = base[GC_SIZE] / sizeof(uintptr_t);
             
+            //if (size > 1000) continue;
+            
             uintptr_t * start = (uintptr_t *)ptr;
             uintptr_t * end = (uintptr_t *)ptr + size;
             
+            //auto old_rootlist = rootlist;
             _gc_scan(start, end, &rootlist);
+            //if (old_rootlist == rootlist) { }
             
             _gc_set_color(ptr, GC_BLACK);
             
             n += 1;
         }
         
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        gc_safepoint_unlock();
         ResumeThread((HANDLE)_main_thread);
-        std::atomic_thread_fence(std::memory_order_seq_cst);
         
-        wasted_seconds += get_time() - start_time;
-        secs_mark += get_time() - start_time;
+        double pause_time2 = get_time() - start_time;
+        wasted_seconds += pause_time2;
+        secs_mark += pause_time2;
+        
+        pause_time += pause_time2;
+        if (pause_time > max_pause_time) max_pause_time = pause_time;
+        
+        /////
+        ///// sweep phase
+        /////
+        
+        //#define USE_DISPOSAL_THREAD
+        
         if (!silent) printf("number of found allocations: %zd over %zd words\n", n, _gc_scan_word_count);
         if (!silent) fflush(stdout);
-        
+        #ifdef USE_DISPOSAL_THREAD
+        _disposal_list_mtx.lock();
+        #endif
         start_time = get_time();
         size_t n3 = 0;
         for (size_t k = 0; k < GC_TABLE_SIZE; k++)
         {
-            GcListNode * next = gc_table[k];
-            GcListNode * prev = 0;
+            size_t ** next = gc_table[k];
+            size_t ** prev = 0;
+        #ifndef USE_DISPOSAL_THREAD
+            gc_cmdlist_mtx.lock(); // block main thread malloc from returning
+        #endif
             while (next)
             {
-                GcListNode * c = next;
-                if (_gc_get_color(c->val) != GC_WHITE)
+                char * c = (char *)next;
+                if (_gc_get_color(c) != GC_WHITE)
                     prev = next;
-                next = c->next;
-                if (_gc_get_color(c->val) == GC_WHITE)
+                next = ((size_t ***)(c-GCOFFS))[GC_NEXT];
+                if (_gc_get_color(c) == GC_WHITE)
                 {
-                    if (prev) prev->next = next;
+                    if (prev) (prev-GCOFFS_W)[GC_NEXT] = (size_t *)next;
                     else gc_table[k] = next;
                     
-                    c->next = gc_gc_freelist;
-                    gc_gc_freelist = c;
-                    
-                    _free(c->val-GCOFFS);
+        #ifdef USE_DISPOSAL_THREAD
+                    _disposal_list.push_back((void *)(c-GCOFFS));
+        #else
+                    _free((void *)(c-GCOFFS));
+        #endif
                     n3 += 1;
                 }
             }
+        #ifndef USE_DISPOSAL_THREAD
+            gc_cmdlist_mtx.unlock();
+        #endif
         }
+        #ifdef USE_DISPOSAL_THREAD
+        _disposal_list_mtx.unlock();
+        #endif
         secs_sweep += get_time() - start_time;
         
-        //_gc_unlock();
         if (!silent) printf("number of killed allocations: %zd\n", n3);
         if (!silent) fflush(stdout);
         
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+        /////
+        ///// hashtable growth phase
+        /////
         
-        if (fillrate > 0.5 && GC_TABLE_BITS < 60)
+        if (fillrate > 0.75 && GC_TABLE_BITS < 60)
         {
             auto oldsize = GC_TABLE_SIZE;
             if (fillrate > 0.95)
@@ -582,16 +571,16 @@ static inline unsigned long int _gc_loop(void *)
                 GC_TABLE_BITS += 1;
             if (!silent) printf("! growing hashtable to %zd bits........\n", GC_TABLE_BITS);
             GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
-            GcListNode ** old_table = gc_table;
-            gc_table = (GcListNode **)calloc(GC_TABLE_SIZE, sizeof(GcListNode *));
+            size_t *** old_table = gc_table;
+            gc_table = (size_t ***)calloc(GC_TABLE_SIZE, sizeof(size_t **));
             
             for (size_t k = 0; k < oldsize; k++)
             {
-                GcListNode * next = old_table[k];
+                size_t ** next = old_table[k];
                 while (next)
                 {
-                    _gc_table_push(next->val-GCOFFS);
-                    next = next->next;
+                    _gc_table_push(((char *)next)-GCOFFS);
+                    next = ((size_t ***)(next-GCOFFS_W))[GC_NEXT];
                 }
             }
             
@@ -600,8 +589,13 @@ static inline unsigned long int _gc_loop(void *)
     }
     return 0;
 }
+
+static size_t _gc_thread = 0;
+static size_t _disposal_thread = 0;
 static inline int gc_start()
 {
+    gc_run_startup();
+    
     std::atomic_uint8_t dummy;
     if (!std::atomic_is_lock_free(&dummy))
         assert(((void)"atomic byte accesses must be lockfree", 0));
@@ -609,9 +603,12 @@ static inline int gc_start()
     wasted_seconds = 0.0;
     _gc_thread = (size_t)CreateThread(0, 0, &_gc_loop, 0, 0, 0);
     assert(_gc_thread);
+    #ifdef USE_DISPOSAL_THREAD
+    _disposal_thread = (size_t)CreateThread(0, 0, &_disposal_loop, 0, 0, 0);
+    assert(_disposal_thread);
+    #endif
     return 0;
 }
-
 static inline int gc_end()
 {
     _gc_stop = 1;
@@ -619,10 +616,15 @@ static inline int gc_end()
     CloseHandle((HANDLE)_gc_thread);
     _gc_thread = 0;
     _gc_stop = 0;
+    #ifdef USE_DISPOSAL_THREAD
+    WaitForSingleObject((HANDLE)_disposal_thread, 0);
+    CloseHandle((HANDLE)_disposal_thread);
+    _disposal_thread = 0;
+    #endif
     
     printf("seconds wasted with GC thread blocking main thread: %.4f\n", wasted_seconds);
-    printf("cmd\twhiten\troots\tmark\tsweep\tmaxpause\n");
-    printf("%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\n", secs_cmd, secs_whiten, secs_roots, secs_mark, secs_sweep, max_pause_time);
+    printf("cmdswap\tcmd\twhiten\troots\tmark\tsweep\tmaxpause\n");
+    printf("%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.8f\n", secs_cmdswap, secs_cmd, secs_whiten, secs_roots, secs_mark, secs_sweep, max_pause_time);
     return 0;
 }
 

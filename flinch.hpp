@@ -86,7 +86,7 @@ PFX(Add),PFX(Sub),PFX(Mul),PFX(Div),PFX(Mod),\
     PFX(AddIntInline),PFX(SubIntInline),PFX(MulIntInline),PFX(DivIntInline),PFX(ModIntInline),\
     PFX(AddDubInline),PFX(SubDubInline),PFX(MulDubInline),PFX(DivDubInline),PFX(ModDubInline),\
 PFX(Neg),PFX(BitNot),PFX(And),PFX(Or),PFX(Xor),PFX(Shl),PFX(Shr),PFX(BoolNot),PFX(BoolAnd),PFX(BoolOr),\
-PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(ArrayEmptyLit),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
+PFX(ScopeOpen),PFX(ScopeClose),PFX(ArrayBuild),PFX(ArrayEmptyLit),PFX(ArrayNoGc),PFX(Clone),PFX(CloneDeep),PFX(Punt),PFX(PuntN),\
 PFX(ArrayIndex),PFX(ArrayLen),PFX(ArrayLenMinusOne),PFX(ArrayPushIn),PFX(ArrayPopOut),PFX(ArrayPushBack),PFX(ArrayPopBack),PFX(ArrayConcat),\
 PFX(StringLiteral),PFX(StringLitReference),\
 PFX(FuncDec),PFX(FuncLookup),PFX(FuncCall),PFX(FuncEnd),PFX(LabelDec),PFX(LabelLookup),\
@@ -591,6 +591,7 @@ Program load_program(string text)
     trivial_ops.insert("@++", ArrayPushBack);
     trivial_ops.insert("@--", ArrayPopBack);
     trivial_ops.insert("@@", ArrayConcat);
+    trivial_ops.insert("@nogc", ArrayNoGc);
     
     for (i = 0; i < program_texts.size() && program_texts[i] != ""; i++)
     {
@@ -1223,6 +1224,11 @@ int interpreter_core(const Program & programdata, int i)
         Array * al = vl.as_array_ptr_thru_ref();
         for (auto & item : *ar->items())
             al->items()->push_back(item);
+    
+    INTERPRETER_MIDCASE(ArrayNoGc)
+        auto & v = valback();
+        Array * a = v.as_array_ptr_thru_ref();
+        a->items()->nogc();
     
     INTERPRETER_MIDCASE(StringLiteral)
         valpush(make_array(make_array_data(s.programdata.get_token_stringval(n))));

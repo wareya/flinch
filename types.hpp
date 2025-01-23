@@ -162,6 +162,15 @@ struct PODVec
     size_t mlength = 0;
     size_t mcapacity = 0;
     
+    bool _nogc = false;
+    template<typename U = T>
+    typename std::enable_if<std::is_same<U, DynamicType>::value, void>::type
+    nogc()
+    {
+        _nogc = true;
+        if (mbuffer) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, 0);
+    }
+    
     PODVec() { }
     PODVec(size_t count, const T & value = T())
     {
@@ -182,7 +191,8 @@ struct PODVec
     typename std::enable_if<std::is_same<U, DynamicType>::value, void>::type
     connect_tracing_if_dyntype()
     { 
-        if (mbuffer) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, mcapacity);
+        if (mbuffer && !_nogc) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, mcapacity);
+        if (mbuffer && _nogc) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, 0);
     }
     
     PODVec(const PODVec & other)

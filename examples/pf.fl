@@ -18,6 +18,7 @@ lcg^
 generate_grid^
     $size$ ->
     [] $grid$ ->
+    grid @nogc
     
     ( size * size -> $size2$ )
     

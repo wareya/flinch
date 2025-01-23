@@ -72,9 +72,9 @@ static inline void _gc_set_color(char * p, uint8_t color)
     fence0();
     
     //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_release);
-    ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_seq_cst);
+    //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_seq_cst);
     //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color);
-    //((uint8_t *)(p-GCOFFS))[GC_COLOR] = color;
+    ((uint8_t *)(p-GCOFFS))[GC_COLOR] = color;
     fence0();
     
 }
@@ -84,9 +84,9 @@ static inline uint8_t _gc_get_color(char * p)
     fence0();
     
     //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_acquire);
-    auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_seq_cst);
+    //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_seq_cst);
     //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load();
-    //auto ret = ((uint8_t *)(p-GCOFFS))[GC_COLOR];
+    auto ret = ((uint8_t *)(p-GCOFFS))[GC_COLOR];
     fence0();
     
     return ret;
@@ -357,10 +357,17 @@ static inline unsigned long int _disposal_loop(void *)
         _disposal_list_mtx.lock();
         gc_cmdlist_mtx.lock();
         fence();
+        size_t i = 0;
         while (_disposal_list.size())
         {
             free(_disposal_list.back());
             _disposal_list.pop_back();
+            i++;
+            if ((i & 0x3FFF) == 0)
+            {
+                gc_cmdlist_mtx.unlock();
+                gc_cmdlist_mtx.lock();
+            }
         }
         _disposal_list = {};
         fence();
@@ -382,11 +389,9 @@ static inline unsigned long int _gc_loop(void *)
     bool silent = true;
     while (1)
     {
-        Sleep(50);
+        Sleep(1);
         if (_gc_stop)
             return 0;
-        
-        fence3();
         
         if (!silent) puts("-- starting GC cycle");
         if (!silent) fflush(stdout);

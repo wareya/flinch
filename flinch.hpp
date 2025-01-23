@@ -13,6 +13,11 @@
 
 #include <cassert>
 #include <initializer_list>
+struct DynamicType;
+
+#ifndef NOINLINE
+#define NOINLINE __attribute__((noinline))
+#endif
 
 /*
 #include <gc.h>
@@ -24,11 +29,9 @@
 #include "nogc.h"
 */
 
-#ifndef NOINLINE
-#define NOINLINE __attribute__((noinline))
-#endif
-
 #include "gc.hpp"
+
+static inline void ** vec_dyntype_trace_func(void * alloc, void ** current, size_t i, size_t userdata);
 
 #define malloc(X) gc_malloc((X))
 #define free(X) gc_free((X))
@@ -111,7 +114,6 @@ struct CompFunc { iword_t loc, len, varcount; };
 struct Func { iword_t loc, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
-struct DynamicType;
 typedef Ptr(PODVec<DynamicType>) ArrayData;
 
 struct Ref {
@@ -283,6 +285,24 @@ struct DynamicType {
     
     DynamicType clone(bool deep);
 };
+
+static inline void ** vec_dyntype_trace_func(void * alloc, void ** current, size_t, size_t capacity)
+{
+    auto bm = (DynamicType *)alloc;
+    size_t i = 0;
+    if (current != 0)
+    {
+        auto cur = (DynamicType *)current;
+        i = cur - bm;
+        i += 1;
+    }
+    for (; i < capacity; i++)
+    {
+        if (bm[i].is_ref() || bm[i].is_array())
+            return (void **)&(bm[i]);
+    }
+    return 0;
+}
 
 // the "and" gets optimized away because the affected bit is multiplied out
 // but it's necessary because adding an out-of-range offset would be UB

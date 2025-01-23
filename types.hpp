@@ -166,10 +166,25 @@ struct PODVec
     PODVec(size_t count, const T & value = T())
     {
         mlength = count;
-        mbuffer = PtrCast(T, malloc(sizeof(T) * mlength));
+        mcapacity = mlength;
+        mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
         for (size_t i = 0; i < count; i++)
             mbuffer[i] = value;
+        
+        connect_tracing_if_dyntype();
     }
+    
+    template<typename U = T>
+    typename std::enable_if<!std::is_same<U, DynamicType>::value, void>::type
+    connect_tracing_if_dyntype() { }
+    
+    template<typename U = T>
+    typename std::enable_if<std::is_same<U, DynamicType>::value, void>::type
+    connect_tracing_if_dyntype()
+    { 
+        if (mbuffer) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, mcapacity);
+    }
+    
     PODVec(const PODVec & other)
     {
         mlength = other.mlength;
@@ -181,12 +196,14 @@ struct PODVec
             for (size_t i = 0; i < mlength; i++)
                 mbuffer[i] = other.mbuffer[i];
         }
+        connect_tracing_if_dyntype();
     }
     PODVec(PODVec && other)
     {
         mbuffer = other.mbuffer; other.mbuffer = 0;
         mlength = other.mlength; other.mlength = 0;
         mcapacity = other.mcapacity; other.mcapacity = 0;
+        connect_tracing_if_dyntype();
     }
     
     ~PODVec() { if(mbuffer) free(mbuffer); mbuffer = 0; }
@@ -204,6 +221,7 @@ struct PODVec
             for (size_t i = 0; i < mlength; i++)
                 mbuffer[i] = other.mbuffer[i];
         }
+        connect_tracing_if_dyntype();
         return *this;
     }
     PODVec & operator=(PODVec && other)
@@ -213,6 +231,7 @@ struct PODVec
         mbuffer = other.mbuffer; other.mbuffer = 0;
         mlength = other.mlength; other.mlength = 0;
         mcapacity = other.mcapacity; other.mcapacity = 0;
+        connect_tracing_if_dyntype();
         return *this;
     }
     
@@ -291,6 +310,7 @@ struct PODVec
             newly[i] = mbuffer[i];
         free(mbuffer);
         mbuffer = newly;
+        connect_tracing_if_dyntype();
     }
     
     NOINLINE void insert_at(size_t i, T && item)

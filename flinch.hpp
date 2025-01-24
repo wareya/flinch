@@ -19,7 +19,8 @@ struct DynamicType;
 #define NOINLINE __attribute__((noinline))
 #endif
 
-/*
+#ifndef CUSTOM_GC
+
 #include <gc.h>
 #define malloc(X) GC_malloc((X))
 #define free(X) GC_free((X))
@@ -27,7 +28,8 @@ struct DynamicType;
 #define calloc(X, Y) GC_malloc((X)*(Y))
 
 #include "nogc.h"
-*/
+
+#else
 
 #include "gc.hpp"
 
@@ -38,6 +40,7 @@ static inline void ** vec_dyntype_trace_func(void * alloc, void ** current, size
 #define realloc(X, Y) gc_realloc((X), (Y))
 #define calloc(X, Y) gc_malloc((X)*(Y))
 
+#endif
 
 //#define THROWSTR(X) throw std::runtime_error(X)
 //#define THROWSTR(X) throw (X)
@@ -1265,9 +1268,13 @@ const HandlerInfo handler = { TOKEN_TABLE };
 
 int interpret(const Program & programdata)
 {
+    #ifndef CUSTOM_GC
+    interpreter_core(programdata, 0);
+    #else
     gc_start();
     interpreter_core(programdata, 0);
     gc_end();
+    #endif
     return 0;
 }
 

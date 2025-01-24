@@ -15,7 +15,7 @@ static inline double get_time() {
 #include <windows.h>
 #include <psapi.h>
 
-static inline void * gc_malloc(size_t n);
+extern "C" void * gc_malloc(size_t n);
 static inline void * gc_calloc(size_t c, size_t n);
 static void gc_free(void *);
 static void * gc_realloc(void * _p, size_t n);
@@ -200,7 +200,7 @@ static double secs_sweep = 0.0;
 // number of allocations (size-adjusted) before GC happens
 // larger number = more hash table collisions, better use of context switches
 // lower number = more context switches and worse cache usage, shorter individual pauses
-// default: 200000
+// default: 100000
 #define GC_MSG_QUEUE_SIZE 100000
 #endif
 
@@ -227,6 +227,24 @@ static inline void _gc_safepoint_unlock()
 }
 // called by main thread
 
+static void _gc_safepoint_impl()
+{
+    #ifdef COLLECT_STATS
+    double start = get_time();
+    #endif
+    
+    while (!_gc_baton_atomic) { }
+    safepoint_mutex.unlock();
+    while (_gc_baton_atomic) { }
+    safepoint_mutex.lock();
+
+    #ifdef COLLECT_STATS
+    double pause_time = get_time() - start;
+    secs_pause += pause_time;
+    if (pause_time > max_pause_time) max_pause_time = pause_time;
+    #endif
+}
+
 static inline void _gc_safepoint(size_t inc)
 {
     static size_t n = 0;
@@ -234,21 +252,11 @@ static inline void _gc_safepoint(size_t inc)
     if (n >= GC_MSG_QUEUE_SIZE)
     {
         n = 0;
-        
-        double start = get_time();
-        
-        while (!_gc_baton_atomic) { }
-        safepoint_mutex.unlock();
-        while (_gc_baton_atomic) { }
-        safepoint_mutex.lock();
-    
-        double pause_time = get_time() - start;
-        secs_pause += pause_time;
-        if (pause_time > max_pause_time) max_pause_time = pause_time;
+        _gc_safepoint_impl();
     }
 }
 
-static inline void * gc_malloc(size_t n)
+extern "C" void * gc_malloc(size_t n)
 {
     if (!n) return 0;
     auto i = (n + 0xFF) / 0x100; // size adjustment so very large allocations act like multiple w/r/t GC timing
@@ -256,11 +264,12 @@ static inline void * gc_malloc(size_t n)
     
     char * p = (char *)_malloc(n+GCOFFS);
     if (!p) return 0;
+    p += GCOFFS;
     
-    ((size_t *)p)[GC_SIZE] = n;
-    //gc_cmd.list[gc_cmd.len++] = p;
-    gc_cmd.list[gc_cmd.len++] = p+GCOFFS;
-    return (void *)(p+GCOFFS);
+    ((size_t *)(p-GCOFFS))[GC_SIZE] = n;
+    gc_cmd.list[gc_cmd.len++] = p;
+    
+    return (void *)(p);
 }
 
 static inline void * gc_calloc(size_t c, size_t n)
@@ -341,7 +350,7 @@ static size_t _gc_scan_word_count = 0;
         if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; }\
         char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
-        if (v && _gc_get_color(v) != GC_BLACK)\
+        if (v && _gc_get_color(v) < GC_BLACK)\
         {\
             _gc_set_color(v, GC_GREY);\
             _gc_list_push(rootlist, v, &gc_gc_freelist);\
@@ -423,8 +432,6 @@ static inline unsigned long int _gc_loop(void *)
         //printf("rbp:%p\trsp:%p\trip:%p\tstack height:%zu\n", (void *)ctx.Rbp, (void *)ctx.Rsp, (void *)ctx.Rip, _main_stack_hi-ctx.Rsp);
         
         double start_start_time = get_time();
-        
-        // gc_safepoint_lock();
         
         /////
         ///// initial coloring phase
@@ -535,7 +542,7 @@ static inline unsigned long int _gc_loop(void *)
                 {
                     char * v = (char *)*v_;
                     _gc_scan_word_count += 1;
-                    if (v && _gc_get_color(v) != GC_BLACK)
+                    if (v && _gc_get_color(v) < GC_BLACK)
                     {
                         _gc_set_color(v, GC_GREY);
                         _gc_list_push(&rootlist, v, &gc_gc_freelist);
@@ -555,7 +562,6 @@ static inline unsigned long int _gc_loop(void *)
         
         _gc_safepoint_unlock();
         ResumeThread((HANDLE)_main_thread);
-        fence();
         
         double pause_time = get_time() - start_start_time;
         wasted_seconds += pause_time;
@@ -564,7 +570,7 @@ static inline unsigned long int _gc_loop(void *)
         ///// sweep phase
         /////
         
-        #define USE_DISPOSAL_THREAD
+        //#define USE_DISPOSAL_THREAD
         
         if (!silent) printf("number of found allocations: %zd over %zd words\n", n, _gc_scan_word_count);
         if (!silent) fflush(stdout);
@@ -576,6 +582,8 @@ static inline unsigned long int _gc_loop(void *)
         filled_num = 0;
         for (size_t k = 0; k < GC_TABLE_SIZE; k++)
         {
+            if (gc_table[k])
+                filled_num += 1;
             size_t ** next = gc_table[k];
             size_t ** prev = 0;
             while (next)
@@ -597,8 +605,6 @@ static inline unsigned long int _gc_loop(void *)
                     n3 += 1;
                 }
             }
-            if (gc_table[k])
-                filled_num += 1;
         }
         #ifdef USE_DISPOSAL_THREAD
         _disposal_list_mtx.unlock();
@@ -628,7 +634,7 @@ static inline unsigned long int _gc_loop(void *)
                 size_t ** next = old_table[k];
                 while (next)
                 {
-                    _gc_table_push(((char *)next)-GCOFFS);
+                    _gc_table_push((char *)next);
                     next = ((size_t ***)(next-GCOFFS_W))[GC_NEXT];
                 }
             }
@@ -707,7 +713,9 @@ static inline int gc_end()
     _disposal_thread = 0;
     #endif
     
+    fence();
     _gc_stop = 0;
+    fence();
     
     printf("seconds wasted with GC thread blocking main thread: %.4f\n", wasted_seconds);
     printf("pause\tcmd\twhiten\troots\tmark\tsweep\thipause\thxtable_bits\n");

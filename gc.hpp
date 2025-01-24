@@ -15,6 +15,13 @@ static inline double get_time() {
 #include <windows.h>
 #include <psapi.h>
 
+static inline void * gc_malloc(size_t n);
+static inline void * gc_calloc(size_t c, size_t n);
+static void gc_free(void *);
+static void * gc_realloc(void * _p, size_t n);
+static int gc_start();
+static int gc_end();
+
 // If provided, called during tracing. Return the address containing a GC-owned pointer.
 // Dereferencing the returned pointer must result in a memory cell containing a GC-owned pointer.
 // For the first call, "current" is 0. Each next call has "current" be the last-returned value.
@@ -26,14 +33,6 @@ static inline double get_time() {
 // Returning addresses that do not point at GC-owned pointers will result in undefined behavior.
 // The function must not have any side effects on GC-accessible data, must not lock any mutexes, must not allocate memory, etc.
 typedef void **(*GcTraceFunc)(void * alloc, void ** current, size_t i, size_t userdata);
-
-static inline void * gc_malloc(size_t n);
-static inline void * gc_calloc(size_t c, size_t n);
-static void gc_free(void *);
-static void * gc_realloc(void * _p, size_t n);
-static int gc_start();
-static int gc_end();
-
 static inline void gc_set_trace_func(void * alloc, GcTraceFunc fn, size_t userdata);
 
 // Takes a pointer (void **) that points at a memory region (void *) that may or may not contain non-stack/register roots.
@@ -41,18 +40,17 @@ static inline void gc_set_trace_func(void * alloc, GcTraceFunc fn, size_t userda
 // Size is in words, not bytes
 static inline void gc_add_custom_root_region(void ** alloc, size_t size);
 
+
 std::mutex safepoint_mutex;
-static inline void fence0() { /*std::atomic_thread_fence(std::memory_order_seq_cst);*/ }
-static inline void fence() { /*std::atomic_thread_fence(std::memory_order_seq_cst);*/ }
-static inline void fence2() { /*std::atomic_thread_fence(std::memory_order_seq_cst);*/ }
-static inline void fence3() { std::atomic_thread_fence(std::memory_order_seq_cst); }
-int _gc_m_d_m_d() { fence3(); safepoint_mutex.lock(); fence3(); return 0; }
+static inline void fence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
+int _gc_m_d_m_d() { fence(); safepoint_mutex.lock(); fence(); return 0; }
 int _mutex_dummy = _gc_m_d_m_d();
 
 static size_t _main_thread = 0;
 static std::thread::id main_thread_id = std::this_thread::get_id();
 static inline void enforce_not_main_thread()
 {
+    // only for debugging
     return;
     int x = main_thread_id != std::this_thread::get_id();
     if (!x)
@@ -64,6 +62,7 @@ static inline void enforce_not_main_thread()
 }
 static inline void enforce_yes_main_thread()
 {
+    // only for debugging
     return;
     if (_main_thread != 0) return;
     
@@ -76,33 +75,29 @@ static inline void enforce_yes_main_thread()
     assert(x);
 }
 
-enum { GC_NEXT, GC_COLOR, GC_SIZE, GC_TRACEFN, GC_TRACEFNDAT, GC_USERDATA };
-enum { GC_GREY, GC_WHITE, GC_BLACK, GC_RED };
+enum { GC_NEXT, GC_SIZE, GC_COLOR, GC_TRACEFN, GC_TRACEFNDAT, GC_USERDATA };
+enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
 #define GCOFFS_W 8
 #define GCOFFS (sizeof(size_t *)*GCOFFS_W)
 
 static inline void _gc_set_color(char * p, uint8_t color)
 {
     //assert(((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].is_lock_free());
-    fence0();
     
     //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_release);
     //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_seq_cst);
     //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color);
     ((uint8_t *)(p-GCOFFS))[GC_COLOR*8] = color;
-    fence0();
     
 }
 static inline uint8_t _gc_get_color(char * p)
 {
     //assert(((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].is_lock_free());
-    fence0();
     
     //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_acquire);
     //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_seq_cst);
     //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load();
     auto ret = ((uint8_t *)(p-GCOFFS))[GC_COLOR*8];
-    fence0();
     
     return ret;
 }
@@ -141,7 +136,7 @@ static inline char * _gc_list_pop(GcListNode ** table, GcListNode ** freelist)
 static inline void * _malloc(size_t n)
 {
     enforce_yes_main_thread();
-    return malloc(n);
+    return calloc(1, n);
 }
 static inline void _free(void * p)
 {
@@ -164,21 +159,23 @@ static inline void _free(void * p)
 //#define GC_TABLE_HASH(X) ((((X)>>8)^(X))&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((X)>>4)&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((X)>>5)&(GC_TABLE_SIZE - 1))
-//#define GC_TABLE_HASH(X) (((X)>>6)&(GC_TABLE_SIZE - 1))
-#define GC_TABLE_HASH(X) (((X)>>7)&(GC_TABLE_SIZE - 1))
+#define GC_TABLE_HASH(X) (((X)>>6)&(GC_TABLE_SIZE - 1))
+//#define GC_TABLE_HASH(X) (((X)>>7)&(GC_TABLE_SIZE - 1))
+//#define GC_TABLE_HASH(X) (((X)>>8)&(GC_TABLE_SIZE - 1))
 
 static size_t GC_TABLE_BITS = 16ULL;
 static size_t GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
 static size_t *** gc_table = (size_t ***)calloc(GC_TABLE_SIZE, sizeof(size_t **));
 
-static inline void _gc_table_push(char * _p)
+static inline int _gc_table_push(char * p)
 {
     enforce_not_main_thread();
-    char * p = _p+GCOFFS;
     size_t k = GC_TABLE_HASH((size_t)p);
     
-    ((size_t ***)_p)[GC_NEXT] = gc_table[k];
+    int ret = !!gc_table[k];
+    ((size_t ***)(p-GCOFFS))[GC_NEXT] = gc_table[k];
     gc_table[k] = ((size_t **)p);
+    return ret;
 }
 static inline size_t ** _gc_table_get(char * p)
 {
@@ -192,22 +189,29 @@ static inline size_t ** _gc_table_get(char * p)
 
 static double max_pause_time = 0.0;
 static double wasted_seconds = 0.0;
+static double secs_pause = 0.0;
 static double secs_cmd = 0.0;
 static double secs_whiten = 0.0;
 static double secs_roots = 0.0;
 static double secs_mark = 0.0;
 static double secs_sweep = 0.0;
 
-constexpr int msg_queue_size = 200000; // number of allocations (size-adjusted) before GC happens
+#ifndef GC_MSG_QUEUE_SIZE
+// number of allocations (size-adjusted) before GC happens
+// larger number = more hash table collisions, better use of context switches
+// lower number = more context switches and worse cache usage, shorter individual pauses
+// default: 200000
+#define GC_MSG_QUEUE_SIZE 100000
+#endif
 
 struct _GcCmdlist {
-    char ** list = (char **)malloc(msg_queue_size * sizeof(char *));
+    char ** list = (char **)malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
     size_t len = 0;
 };
 
 _GcCmdlist gc_cmd; // write
 
-std::atomic_uint8_t _gc_baton_atomic = 0;
+std::atomic_uint32_t _gc_baton_atomic = 0;
 
 // called by gc thread
 static inline void _gc_safepoint_lock()
@@ -227,40 +231,35 @@ static inline void _gc_safepoint(size_t inc)
 {
     static size_t n = 0;
     n = n+inc;
-    if (n >= msg_queue_size)
+    if (n >= GC_MSG_QUEUE_SIZE)
     {
         n = 0;
         
         double start = get_time();
-        for (ptrdiff_t i = gc_cmd.len - 1; i >= 0; i--)
-        {
-            char * c = gc_cmd.list[i];
-            _gc_table_push(c);
-        }
-        gc_cmd.len = 0;
         
-        if (_gc_baton_atomic)
-        {
-            safepoint_mutex.unlock();
-            while (_gc_baton_atomic) { }
-            safepoint_mutex.lock();
-        }
-        secs_cmd += get_time() - start;
+        while (!_gc_baton_atomic) { }
+        safepoint_mutex.unlock();
+        while (_gc_baton_atomic) { }
+        safepoint_mutex.lock();
+    
+        double pause_time = get_time() - start;
+        secs_pause += pause_time;
+        if (pause_time > max_pause_time) max_pause_time = pause_time;
     }
 }
 
 static inline void * gc_malloc(size_t n)
 {
     if (!n) return 0;
-    auto i = (n + 0xFFF) / 0x1000; // size adjustment so very large allocations act like multiple w/r/t GC timing
+    auto i = (n + 0xFF) / 0x100; // size adjustment so very large allocations act like multiple w/r/t GC timing
     _gc_safepoint(i);
     
     char * p = (char *)_malloc(n+GCOFFS);
     if (!p) return 0;
     
-    memset(p, 0, n+GCOFFS);
     ((size_t *)p)[GC_SIZE] = n;
-    gc_cmd.list[gc_cmd.len++] = p;
+    //gc_cmd.list[gc_cmd.len++] = p;
+    gc_cmd.list[gc_cmd.len++] = p+GCOFFS;
     return (void *)(p+GCOFFS);
 }
 
@@ -272,7 +271,7 @@ static inline void * gc_calloc(size_t c, size_t n)
 static inline void gc_free(void * p)
 {
     if (!p) return;
-    //_gc_set_color((char *)p, GC_RED);
+    _gc_set_color((char *)p, GC_RED);
 }
 
 static inline void * gc_realloc(void * _p, size_t n)
@@ -338,7 +337,9 @@ static size_t _gc_scan_word_count = 0;
 {\
     while (start != end)\
     {\
-        char * v = (char *)_gc_table_get((char *)(*start));\
+        size_t sw = (size_t)*start;\
+        if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; }\
+        char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
         if (v && _gc_get_color(v) != GC_BLACK)\
         {\
@@ -367,11 +368,16 @@ static inline unsigned long int _disposal_loop(void *)
 {
     while (1)
     {
-        Sleep(1);
         if (_gc_stop)
             return 0;
         
         _disposal_list_mtx.lock();
+        if (!_disposal_list.size())
+        {
+            _disposal_list_mtx.unlock();
+            Sleep(1);
+            continue;
+        }
         size_t i = 0;
         while (_disposal_list.size())
         {
@@ -395,35 +401,26 @@ static inline unsigned long int _gc_loop(void *)
     bool silent = true;
     while (1)
     {
-        Sleep(1);
         if (_gc_stop)
             return 0;
         
         if (!silent) puts("-- starting GC cycle");
         if (!silent) fflush(stdout);
         
-        /////
-        ///// receive hashtable update commands from main thread phase
-        /////
-        
         _gc_safepoint_lock();
         
         // suspend main thread to read its registers and stack
-        fence();
-        fence();
-            CONTEXT ctx = {};
-            //ctx.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
-            ctx.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS;
-            DWORD rval = SuspendThread((HANDLE)_main_thread);
-            int nx = 100000;
-            while (rval == (DWORD)-1 && nx-- > 0)
-                rval = SuspendThread((HANDLE)_main_thread);
-            assert(rval != (DWORD)-1);
-            
-            assert(GetThreadContext((HANDLE)_main_thread, &ctx));
-            //printf("rbp:%p\trsp:%p\trip:%p\tstack height:%zu\n", (void *)ctx.Rbp, (void *)ctx.Rsp, (void *)ctx.Rip, _main_stack_hi-ctx.Rsp);
-        fence();
-        fence();
+        CONTEXT ctx = {};
+        //ctx.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
+        ctx.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS;
+        DWORD rval = SuspendThread((HANDLE)_main_thread);
+        int nx = 100000;
+        while (rval == (DWORD)-1 && nx-- > 0)
+            rval = SuspendThread((HANDLE)_main_thread);
+        assert(rval != (DWORD)-1);
+        
+        assert(GetThreadContext((HANDLE)_main_thread, &ctx));
+        //printf("rbp:%p\trsp:%p\trip:%p\tstack height:%zu\n", (void *)ctx.Rbp, (void *)ctx.Rsp, (void *)ctx.Rip, _main_stack_hi-ctx.Rsp);
         
         double start_start_time = get_time();
         
@@ -452,7 +449,6 @@ static inline unsigned long int _gc_loop(void *)
         if (!silent) puts("whitening done");
         
         secs_whiten += get_time() - start_time;
-        //wasted_seconds += get_time() - start_time;
         
         auto cr = (n2-filled_num)/double(filled_num);
         if (!silent) printf("collision rate: %.04f%%\n", cr*100.0);
@@ -461,9 +457,22 @@ static inline unsigned long int _gc_loop(void *)
         auto fillrate = filled_num/double(GC_TABLE_SIZE);
         if (!silent) printf("bin fill rate: %.04f%%\n", fillrate*100.0);
         
-        //gc_safepoint_unlock();
+        /////
+        ///// receive hashtable update commands from main thread phase
+        /////
         
-        if (!silent) puts("-- swapped");
+        start_time = get_time();
+        n2 += gc_cmd.len;
+        for (ptrdiff_t i = gc_cmd.len; i > 0; i--)
+        {
+            char * c = gc_cmd.list[i-1];
+            // will be either white (default) or red (freed)
+            filled_num += _gc_table_push(c);
+        }
+        gc_cmd.len = 0;
+        secs_cmd += get_time() - start_time;
+        
+        if (!silent) puts("-- cmdlist updated");
         
         /////
         ///// root collection phase
@@ -516,8 +525,6 @@ static inline unsigned long int _gc_loop(void *)
                 continue;
             }
             
-            //auto old_rootlist = rootlist;
-            
             if (base[GC_TRACEFN])
             {
                 GcTraceFunc f = (GcTraceFunc)(void *)(base[GC_TRACEFN]);
@@ -527,7 +534,6 @@ static inline unsigned long int _gc_loop(void *)
                 while (v_)
                 {
                     char * v = (char *)*v_;
-                    //char * v = (char *)_gc_table_get((char *)(*v_));
                     _gc_scan_word_count += 1;
                     if (v && _gc_get_color(v) != GC_BLACK)
                     {
@@ -540,14 +546,19 @@ static inline unsigned long int _gc_loop(void *)
             else
                 _gc_scan(start, end, &rootlist);
             
-            //if (old_rootlist == rootlist) { }
-            
             _gc_set_color(ptr, GC_BLACK);
             
             n += 1;
         }
         
         secs_mark += get_time() - start_time;
+        
+        _gc_safepoint_unlock();
+        ResumeThread((HANDLE)_main_thread);
+        fence();
+        
+        double pause_time = get_time() - start_start_time;
+        wasted_seconds += pause_time;
         
         /////
         ///// sweep phase
@@ -558,9 +569,7 @@ static inline unsigned long int _gc_loop(void *)
         if (!silent) printf("number of found allocations: %zd over %zd words\n", n, _gc_scan_word_count);
         if (!silent) fflush(stdout);
         #ifdef USE_DISPOSAL_THREAD
-        fence3();
         _disposal_list_mtx.lock();
-        fence3();
         #endif
         start_time = get_time();
         size_t n3 = 0;
@@ -592,9 +601,7 @@ static inline unsigned long int _gc_loop(void *)
                 filled_num += 1;
         }
         #ifdef USE_DISPOSAL_THREAD
-        fence3();
         _disposal_list_mtx.unlock();
-        fence3();
         #endif
         secs_sweep += get_time() - start_time;
         
@@ -605,7 +612,7 @@ static inline unsigned long int _gc_loop(void *)
         ///// hashtable growth phase
         /////
         
-        //fillrate = filled_num/double(GC_TABLE_SIZE);
+        fillrate = filled_num/double(GC_TABLE_SIZE);
         
         if (fillrate > 0.95 && GC_TABLE_BITS < 60)
         {
@@ -628,13 +635,6 @@ static inline unsigned long int _gc_loop(void *)
             
             free(old_table);
         }
-        
-        _gc_safepoint_unlock();
-        ResumeThread((HANDLE)_main_thread);
-        
-        double pause_time = get_time() - start_start_time;
-        wasted_seconds += pause_time;
-        if (pause_time > max_pause_time) max_pause_time = pause_time;
     }
     return 0;
 }
@@ -695,13 +695,13 @@ static inline int gc_end()
 {
     _gc_stop = 1;
     WaitForSingleObject((HANDLE)_gc_thread, 0);
-    fence3();
+    fence();
     CloseHandle((HANDLE)_gc_thread);
     _gc_thread = 0;
     #ifdef USE_DISPOSAL_THREAD
     WaitForSingleObject((HANDLE)_disposal_thread, 0);
     _disposal_list_mtx.lock();
-    fence3();
+    fence();
     _disposal_list_mtx.unlock();
     CloseHandle((HANDLE)_disposal_thread);
     _disposal_thread = 0;
@@ -710,8 +710,8 @@ static inline int gc_end()
     _gc_stop = 0;
     
     printf("seconds wasted with GC thread blocking main thread: %.4f\n", wasted_seconds);
-    printf("cmd\twhiten\troots\tmark\tsweep\thipause\thxtable_bits\n");
-    printf("%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%zu\n", secs_cmd, secs_whiten, secs_roots, secs_mark, secs_sweep, max_pause_time, GC_TABLE_BITS);
+    printf("pause\tcmd\twhiten\troots\tmark\tsweep\thipause\thxtable_bits\n");
+    printf("%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%zu\n", secs_pause, secs_cmd, secs_whiten, secs_roots, secs_mark, secs_sweep, max_pause_time, GC_TABLE_BITS);
     return 0;
 }
 

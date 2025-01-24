@@ -3,6 +3,7 @@
 #include <thread>
 #include <assert.h>
 
+#ifdef COLLECT_STATS
 #include <chrono>
 static inline double get_time() {
     auto now = std::chrono::high_resolution_clock::now();
@@ -10,17 +11,16 @@ static inline double get_time() {
     double ret = std::chrono::duration<double>(duration).count();
     return ret;
 }
-#define WIN32_LEAN_AND_MEAN
-#define VC_EXTRALEAN
-#include <windows.h>
-#include <psapi.h>
+#else
+static inline double get_time() { return 0.0 };
+#endif
 
 extern "C" void * gc_malloc(size_t n);
-static inline void * gc_calloc(size_t c, size_t n);
-static void gc_free(void *);
-static void * gc_realloc(void * _p, size_t n);
-static int gc_start();
-static int gc_end();
+extern "C" void * gc_calloc(size_t c, size_t n);
+extern "C" void gc_free(void *);
+extern "C" void * gc_realloc(void * _p, size_t n);
+extern "C" int gc_start();
+extern "C" int gc_end();
 
 // If provided, called during tracing. Return the address containing a GC-owned pointer.
 // Dereferencing the returned pointer must result in a memory cell containing a GC-owned pointer.
@@ -75,30 +75,39 @@ static inline void enforce_yes_main_thread()
     assert(x);
 }
 
-enum { GC_NEXT, GC_SIZE, GC_COLOR, GC_TRACEFN, GC_TRACEFNDAT, GC_USERDATA };
+struct GcAllocHeader
+{
+    size_t ** next;
+    uint32_t size;
+    uint32_t color;
+    size_t tracefndat;
+    GcTraceFunc tracefn;
+};
+
+typedef GcAllocHeader * GcAllocHeaderPtr;
+
 enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
-#define GCOFFS_W 8
+//#define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8*8)
+#define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8)
 #define GCOFFS (sizeof(size_t *)*GCOFFS_W)
 
 static inline void _gc_set_color(char * p, uint8_t color)
 {
-    //assert(((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].is_lock_free());
-    
-    //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_release);
-    //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color, std::memory_order_seq_cst);
-    //((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].store(color);
-    ((uint8_t *)(p-GCOFFS))[GC_COLOR*8] = color;
-    
+    GcAllocHeaderPtr(p-GCOFFS)->color = color;
 }
 static inline uint8_t _gc_get_color(char * p)
 {
-    //assert(((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].is_lock_free());
-    
-    //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_acquire);
-    //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load(std::memory_order_seq_cst);
-    //auto ret = ((std::atomic_uint8_t *)(p-GCOFFS))[GC_COLOR].load();
-    auto ret = ((uint8_t *)(p-GCOFFS))[GC_COLOR*8];
-    
+    auto ret = GcAllocHeaderPtr(p-GCOFFS)->color;
+    return ret;
+}
+
+static inline void _gc_set_size(char * p, size_t size)
+{
+    GcAllocHeaderPtr(p-GCOFFS)->size = size;
+}
+static inline size_t _gc_get_size(char * p)
+{
+    auto ret = GcAllocHeaderPtr(p-GCOFFS)->size;
     return ret;
 }
 
@@ -173,7 +182,7 @@ static inline int _gc_table_push(char * p)
     size_t k = GC_TABLE_HASH((size_t)p);
     
     int ret = !!gc_table[k];
-    ((size_t ***)(p-GCOFFS))[GC_NEXT] = gc_table[k];
+    GcAllocHeaderPtr(p-GCOFFS)->next = gc_table[k];
     gc_table[k] = ((size_t **)p);
     return ret;
 }
@@ -183,7 +192,7 @@ static inline size_t ** _gc_table_get(char * p)
     size_t k = GC_TABLE_HASH((size_t)p);
     size_t ** next = gc_table[k];
     while (next && next != (size_t **)p)
-        next = ((size_t ***)(next-GCOFFS_W))[GC_NEXT];
+        next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
     return next;
 }
 
@@ -259,31 +268,33 @@ static inline void _gc_safepoint(size_t inc)
 extern "C" void * gc_malloc(size_t n)
 {
     if (!n) return 0;
+    n = (n + 63)/64*64;
+    
     auto i = (n + 0xFF) / 0x100; // size adjustment so very large allocations act like multiple w/r/t GC timing
     _gc_safepoint(i);
     
     char * p = (char *)_malloc(n+GCOFFS);
     if (!p) return 0;
-    p += GCOFFS;
     
-    ((size_t *)(p-GCOFFS))[GC_SIZE] = n;
+    p += GCOFFS;
+    _gc_set_size(p, n);
     gc_cmd.list[gc_cmd.len++] = p;
     
     return (void *)(p);
 }
 
-static inline void * gc_calloc(size_t c, size_t n)
+extern "C" void * gc_calloc(size_t c, size_t n)
 {
     return gc_malloc(c*n);
 }
 
-static inline void gc_free(void * p)
+extern "C" void gc_free(void * p)
 {
     if (!p) return;
     _gc_set_color((char *)p, GC_RED);
 }
 
-static inline void * gc_realloc(void * _p, size_t n)
+extern "C" void * gc_realloc(void * _p, size_t n)
 {
     char * p = (char *)_p;
     #if ISTEMPLATE
@@ -295,7 +306,7 @@ static inline void * gc_realloc(void * _p, size_t n)
     
     auto x = PtrCast(char, gc_malloc(n));
     assert(x);
-    size_t size2 = ((size_t *)(p-GCOFFS))[GC_SIZE];
+    size_t size2 = _gc_get_size(p);
     memcpy(x, p, n < size2 ? n : size2);
     gc_free(p);
     
@@ -315,29 +326,11 @@ static inline void gc_set_trace_func(void * alloc, GcTraceFunc fn, size_t userda
 {
     size_t * p = ((size_t *)alloc)-GCOFFS_W;
     
-    p[GC_TRACEFN] = (size_t)(void *)(fn);
-    p[GC_TRACEFNDAT] = userdata;
+    GcAllocHeaderPtr(p)->tracefn = fn;
+    GcAllocHeaderPtr(p)->tracefndat = userdata;
 }
 
 static size_t _main_stack_hi = 0;
-static inline void gc_run_startup()
-{
-    if (_main_thread != 0)
-        return;
-    
-    HANDLE h;
-    auto cprc = GetCurrentProcess();
-    auto cthd = GetCurrentThread();
-    assert(DuplicateHandle(cprc, cthd, cprc, &h, 0, FALSE, DUPLICATE_SAME_ACCESS));
-    _main_thread = (size_t)h;
-    
-    printf("got main thread! %zd\n", _main_thread);
-    
-    ULONGLONG lo;
-    ULONGLONG hi;
-    GetCurrentThreadStackLimits(&lo, &hi);
-    _main_stack_hi = (size_t)hi;
-}
 
 static std::atomic_int _gc_stop = 0;
 
@@ -370,9 +363,12 @@ void _gc_scan_unsanitary(size_t * stack, size_t * stack_top, GcListNode ** rootl
     _GC_SCAN(stack, stack_top, rootlist)
 }
 
+ 
+//#define USE_DISPOSAL_THREAD
+
+#ifdef USE_DISPOSAL_THREAD
 std::vector<void *> _disposal_list;
 std::mutex _disposal_list_mtx;
-
 static inline unsigned long int _disposal_loop(void *)
 {
     while (1)
@@ -404,6 +400,14 @@ static inline unsigned long int _disposal_loop(void *)
         _disposal_list_mtx.unlock();
     }
 }
+#endif
+
+struct Context;
+static inline size_t _gc_context_size;
+static inline Context * _gc_suspend_main_and_get_context();
+static inline size_t _gc_context_get_rsp(Context *);
+static inline size_t _gc_context_get_size();
+static inline void _gc_unsuspend_main();
 
 static inline unsigned long int _gc_loop(void *)
 {
@@ -417,19 +421,7 @@ static inline unsigned long int _gc_loop(void *)
         if (!silent) fflush(stdout);
         
         _gc_safepoint_lock();
-        
-        // suspend main thread to read its registers and stack
-        CONTEXT ctx = {};
-        //ctx.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
-        ctx.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS;
-        DWORD rval = SuspendThread((HANDLE)_main_thread);
-        int nx = 100000;
-        while (rval == (DWORD)-1 && nx-- > 0)
-            rval = SuspendThread((HANDLE)_main_thread);
-        assert(rval != (DWORD)-1);
-        
-        assert(GetThreadContext((HANDLE)_main_thread, &ctx));
-        //printf("rbp:%p\trsp:%p\trip:%p\tstack height:%zu\n", (void *)ctx.Rbp, (void *)ctx.Rsp, (void *)ctx.Rip, _main_stack_hi-ctx.Rsp);
+        Context * ctx = _gc_suspend_main_and_get_context();
         
         double start_start_time = get_time();
         
@@ -449,7 +441,7 @@ static inline unsigned long int _gc_loop(void *)
             while (next)
             {
                 _gc_set_color((char *)next, GC_WHITE);
-                next = ((size_t ** *)(next-GCOFFS_W))[GC_NEXT];
+                next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
                 n2 += 1;
             }
         }
@@ -496,11 +488,11 @@ static inline unsigned long int _gc_loop(void *)
             _gc_scan_unsanitary(c, c+c_size, &rootlist);
         }
         
-        size_t * c = (size_t *)&ctx;
-        size_t c_size = sizeof(CONTEXT)/sizeof(size_t);
+        size_t * c = (size_t *)ctx;
+        size_t c_size = _gc_context_get_size()/sizeof(size_t);
         _gc_scan(c, c+c_size, &rootlist);
         
-        size_t * stack = (size_t *)(ctx.Rsp / 8 * 8);
+        size_t * stack = (size_t *)(_gc_context_get_rsp(ctx) / 8 * 8);
         size_t * stack_top = (size_t *)_main_stack_hi;
         _gc_scan_unsanitary(stack, stack_top, &rootlist);
         
@@ -520,8 +512,8 @@ static inline unsigned long int _gc_loop(void *)
         while (rootlist)
         {
             char * ptr = _gc_list_pop(&rootlist, &gc_gc_freelist);
-            size_t * base = (size_t *)(ptr-GCOFFS);
-            size_t size = base[GC_SIZE] / sizeof(size_t);
+            GcAllocHeaderPtr base = GcAllocHeaderPtr(ptr-GCOFFS);
+            size_t size = _gc_get_size(ptr) / sizeof(size_t);
             
             size_t * start = (size_t *)ptr;
             size_t * end = (size_t *)ptr + size;
@@ -532,10 +524,10 @@ static inline unsigned long int _gc_loop(void *)
                 continue;
             }
             
-            if (base[GC_TRACEFN])
+            if (base->tracefn)
             {
-                GcTraceFunc f = (GcTraceFunc)(void *)(base[GC_TRACEFN]);
-                size_t userdata = base[GC_TRACEFNDAT];
+                GcTraceFunc f = base->tracefn;
+                auto userdata = base->tracefndat;
                 size_t i = 0;
                 void ** v_ = f(ptr, 0, i++, userdata);
                 while (v_)
@@ -561,7 +553,7 @@ static inline unsigned long int _gc_loop(void *)
         secs_mark += get_time() - start_time;
         
         _gc_safepoint_unlock();
-        ResumeThread((HANDLE)_main_thread);
+        _gc_unsuspend_main();
         
         double pause_time = get_time() - start_start_time;
         wasted_seconds += pause_time;
@@ -569,8 +561,6 @@ static inline unsigned long int _gc_loop(void *)
         /////
         ///// sweep phase
         /////
-        
-        //#define USE_DISPOSAL_THREAD
         
         if (!silent) printf("number of found allocations: %zd over %zd words\n", n, _gc_scan_word_count);
         if (!silent) fflush(stdout);
@@ -591,10 +581,10 @@ static inline unsigned long int _gc_loop(void *)
                 char * c = (char *)next;
                 if (_gc_get_color(c) != GC_WHITE)
                     prev = next;
-                next = ((size_t ***)(c-GCOFFS))[GC_NEXT];
+                next = GcAllocHeaderPtr(c-GCOFFS)->next;
                 if (_gc_get_color(c) == GC_WHITE)
                 {
-                    if (prev) (prev-GCOFFS_W)[GC_NEXT] = (size_t *)next;
+                    if (prev) GcAllocHeaderPtr(prev-GCOFFS_W)->next = (size_t **)next;
                     else gc_table[k] = next;
                     
         #ifdef USE_DISPOSAL_THREAD
@@ -635,7 +625,7 @@ static inline unsigned long int _gc_loop(void *)
                 while (next)
                 {
                     _gc_table_push((char *)next);
-                    next = ((size_t ***)(next-GCOFFS_W))[GC_NEXT];
+                    next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
                 }
             }
             
@@ -645,7 +635,48 @@ static inline unsigned long int _gc_loop(void *)
     return 0;
 }
 
-void _gc_get_data_sections()
+///////
+/////// platform-specific stuff begins here ///////
+///////
+
+#define WIN32_LEAN_AND_MEAN
+#define VC_EXTRALEAN
+#include <windows.h>
+#include <psapi.h>
+
+struct Context { CONTEXT ctx; };
+
+static inline Context *_gc_suspend_main_and_get_context()
+{
+    // suspend main thread to read its registers and stack
+    static Context ctx = {};
+    //ctx.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
+    ctx.ctx.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS;
+    DWORD rval = SuspendThread((HANDLE)_main_thread);
+    int nx = 100000;
+    while (rval == (DWORD)-1 && nx-- > 0)
+        rval = SuspendThread((HANDLE)_main_thread);
+    assert(rval != (DWORD)-1);
+    
+    assert(GetThreadContext((HANDLE)_main_thread, &ctx.ctx));
+    //printf("rbp:%p\trsp:%p\trip:%p\tstack height:%zu\n", (void *)ctx.Rbp, (void *)ctx.Rsp, (void *)ctx.Rip, _main_stack_hi-ctx.Rsp);
+    
+    return &ctx;
+}
+static inline size_t _gc_context_get_rsp(Context * ctx)
+{
+    return (size_t)ctx->ctx.Rsp;
+}
+static inline size_t _gc_context_get_size()
+{
+    return sizeof(CONTEXT);
+}
+static inline void _gc_unsuspend_main()
+{
+    ResumeThread((HANDLE)_main_thread);
+}
+
+static inline void _gc_get_data_sections()
 {
     HANDLE process = GetCurrentProcess();
 
@@ -674,11 +705,30 @@ void _gc_get_data_sections()
     }
 }
 
+static inline void gc_run_startup()
+{
+    if (_main_thread != 0)
+        return;
+    
+    HANDLE h;
+    auto cprc = GetCurrentProcess();
+    auto cthd = GetCurrentThread();
+    assert(DuplicateHandle(cprc, cthd, cprc, &h, 0, FALSE, DUPLICATE_SAME_ACCESS));
+    _main_thread = (size_t)h;
+    
+    printf("got main thread! %zd\n", _main_thread);
+    
+    ULONGLONG lo;
+    ULONGLONG hi;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    _main_stack_hi = (size_t)hi;
+}
+
 static size_t _gc_thread = 0;
 #ifdef USE_DISPOSAL_THREAD
 static size_t _disposal_thread = 0;
 #endif
-static inline int gc_start()
+extern "C" int gc_start()
 {
     _gc_get_data_sections();
     
@@ -697,7 +747,7 @@ static inline int gc_start()
     #endif
     return 0;
 }
-static inline int gc_end()
+extern "C" int gc_end()
 {
     _gc_stop = 1;
     WaitForSingleObject((HANDLE)_gc_thread, 0);

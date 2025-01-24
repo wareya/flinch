@@ -33,7 +33,7 @@ struct DynamicType;
 
 #include "gc.hpp"
 
-static inline void ** vec_dyntype_trace_func(void * alloc, void ** current, size_t i, size_t userdata);
+static inline void ** vec_dyntype_trace_func(void * alloc, void ** current, size_t i, size_t capacity);
 
 #define malloc(X) gc_malloc((X))
 #define free(X) gc_free((X))

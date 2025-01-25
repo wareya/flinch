@@ -811,7 +811,7 @@ inline static void * _gc_raw_malloc(size_t n)
     
     // n is basic allocation size (rounded up to a power of 2)
     auto n2 = n + GCOFFS;
-    auto p = _gc_heap_cur.fetch_add(n2, std::memory_order_acq_rel);
+    char * p = _gc_heap_cur.fetch_add(n2, std::memory_order_acq_rel);
     // any race on the calulation of "over" will only result in a slight excess of committed memory, no unsafety
     ptrdiff_t over = p + n2 - _gc_heap_top.load(std::memory_order_relaxed);
     if (over > 0)

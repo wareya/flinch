@@ -1268,13 +1268,7 @@ const HandlerInfo handler = { TOKEN_TABLE };
 
 int interpret(const Program & programdata)
 {
-    #ifndef CUSTOM_GC
     interpreter_core(programdata, 0);
-    #else
-    gc_start();
-    interpreter_core(programdata, 0);
-    gc_end();
-    #endif
     return 0;
 }
 

@@ -224,8 +224,8 @@ static double secs_sweep = 0.0;
 // number of allocations (size-adjusted) before GC happens
 // larger number = more hash table collisions, better use of context switches
 // lower number = more context switches and worse cache usage, shorter individual pauses
-// default: 100000
-#define GC_MSG_QUEUE_SIZE 100000
+// default: 75000
+#define GC_MSG_QUEUE_SIZE 75000
 #endif
 
 struct _GcCmdlist {
@@ -241,14 +241,18 @@ std::atomic_uint32_t _gc_baton_atomic = 0;
 // called by gc thread
 static inline void _gc_safepoint_lock()
 {
+    fence();
     _gc_baton_atomic = 1;
     safepoint_mutex.lock();
+    fence();
 }
 // called by gc thread
 static inline void _gc_safepoint_unlock()
 {
+    fence();
     safepoint_mutex.unlock();
     _gc_baton_atomic = 0;
+    fence();
 }
 // called by main thread
 
@@ -258,10 +262,12 @@ static void _gc_safepoint_impl()
     double start = get_time();
     #endif
     
-    while (!_gc_baton_atomic) { }
+    fence();
+    while (!_gc_baton_atomic) { fence(); }
     safepoint_mutex.unlock();
-    while (_gc_baton_atomic) { }
+    while (_gc_baton_atomic) { fence(); }
     safepoint_mutex.lock();
+    fence();
 
     #ifdef COLLECT_STATS
     double pause_time = get_time() - start;
@@ -800,6 +806,8 @@ extern "C" int gc_end()
     printf("%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%zu\n", secs_pause, secs_cmd, secs_whiten, secs_roots, secs_mark, secs_sweep, max_pause_time, GC_TABLE_BITS);
     return 0;
 }
+struct GcCanary { GcCanary() { gc_start(); } ~GcCanary() { gc_end(); } };
+static GcCanary _gc_canary __attribute__((init_priority(102))) = GcCanary();
 
 static size_t _gc_os_page_size = 0;
 static char * _gc_heap_base = 0;

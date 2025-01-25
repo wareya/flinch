@@ -798,8 +798,8 @@ inline static void * _gc_raw_malloc(size_t n)
     {
         char * p;
         do {
-            p = _gc_heap_free[bin].load(std::memory_order_relaxed);
-        } while (p && !_gc_heap_free[bin].compare_exchange_weak(p, (char*)GcAllocHeaderPtr(p)->next, std::memory_order_relaxed, std::memory_order_relaxed));
+            p = _gc_heap_free[bin].load(std::memory_order_acquire);
+        } while (p && !_gc_heap_free[bin].compare_exchange_weak(p, (char*)GcAllocHeaderPtr(p)->next, std::memory_order_release, std::memory_order_relaxed));
         
         _gc_asan_unpoison(p, GCOFFS);
         memset(p, 0, n + GCOFFS);
@@ -861,8 +861,8 @@ inline static void _gc_raw_free(void * _p)
     auto gp = GcAllocHeaderPtr(p);
     do
     {
-        gp->next = (size_t **)_gc_heap_free[bin].load(std::memory_order_relaxed);
-    } while (!_gc_heap_free[bin].compare_exchange_weak(*(char **)&gp->next, (char *)gp, std::memory_order_relaxed, std::memory_order_relaxed));
+        gp->next = (size_t **)_gc_heap_free[bin].load(std::memory_order_acquire);
+    } while (!_gc_heap_free[bin].compare_exchange_weak(*(char **)&gp->next, (char *)gp, std::memory_order_release, std::memory_order_relaxed));
     
     _gc_asan_poison(p, GCOFFS);
     #endif

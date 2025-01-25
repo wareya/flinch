@@ -180,8 +180,8 @@ static inline void _free(void * p)
 //#define GC_TABLE_HASH(X) ((((X)>>8)^(X))&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((X)>>4)&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((X)>>5)&(GC_TABLE_SIZE - 1))
-#define GC_TABLE_HASH(X) (((X)>>6)&(GC_TABLE_SIZE - 1))
-//#define GC_TABLE_HASH(X) (((X)>>7)&(GC_TABLE_SIZE - 1))
+//#define GC_TABLE_HASH(X) (((X)>>6)&(GC_TABLE_SIZE - 1))
+#define GC_TABLE_HASH(X) (((X)>>7)&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((X)>>8)&(GC_TABLE_SIZE - 1))
 
 static size_t GC_TABLE_BITS = 16ULL;
@@ -743,6 +743,7 @@ struct GcCanary { GcCanary() { gc_start(); } ~GcCanary() { gc_end(); } };
 static GcCanary _gc_canary __attribute__((init_priority(102))) = GcCanary();
 
 static size_t _gc_os_page_size = 0;
+static size_t _gc_os_page_size_log2 = 0;
 static char * _gc_heap_base = 0;
 static std::atomic<char *> _gc_heap_cur = 0;
 static std::atomic<char *> _gc_heap_top = 0;
@@ -753,6 +754,8 @@ static inline CharP _gc_os_init_heap()
     SYSTEM_INFO info;
     GetSystemInfo(&info);
     _gc_os_page_size = info.dwPageSize;
+    _gc_os_page_size_log2 = 64-__builtin_clzll(_gc_os_page_size-1);
+    printf("%zd\n", _gc_os_page_size_log2);
     // 16 TiB should be enough for anybody
     auto ret = (char *)VirtualAlloc(0, 0x100000000000, MEM_RESERVE, PAGE_READWRITE);
     assert(ret);
@@ -777,6 +780,23 @@ void _gc_asan_unpoison(void * a, size_t n) { ASAN_UNPOISON_MEMORY_REGION(a, n); 
 void _gc_asan_unpoison(void *, size_t) { }
 void _gc_asan_poison(void *, size_t) { }
 #endif
+
+inline static void _gc_rawmal_inner_pages(char ** p, size_t * s)
+{
+    char * p2 = *p;
+    char * end = *p + *s;
+    p2 += _gc_os_page_size-1;
+    p2 = (char *)(size_t(p2) >> _gc_os_page_size_log2);
+    p2 = (char *)(size_t(p2) << _gc_os_page_size_log2);
+    *p = 0;
+    *s = 0;
+    if (end < p2 + _gc_os_page_size)
+        return;
+    size_t byte_count = end-p2;
+    size_t page_count = byte_count >> _gc_os_page_size_log2;
+    *p = p2;
+    *s = page_count << _gc_os_page_size_log2;
+}
 
 inline static void * _gc_raw_malloc(size_t n)
 {
@@ -803,6 +823,13 @@ inline static void * _gc_raw_malloc(size_t n)
         if (p)
         {
             _gc_asan_unpoison(p, GCOFFS);
+            
+            char * p2 = p+GCOFFS;
+            size_t s = n;
+            _gc_rawmal_inner_pages(&p2, &s);
+            if (s)
+                VirtualAlloc(p2, s, MEM_COMMIT, PAGE_READWRITE);
+            
             memset(p, 0, n + GCOFFS);
             GcAllocHeaderPtr(p)->size = n;
             _gc_asan_poison(p, GCOFFS);
@@ -858,6 +885,12 @@ inline static void _gc_raw_free(void * _p)
     size_t n = GcAllocHeaderPtr(p)->size;
     //n = std::bit_ceil(n);
     n = 1ULL << (64-__builtin_clzll(n-1));
+    
+    char * p2 = p+GCOFFS;
+    size_t s = n;
+    _gc_rawmal_inner_pages(&p2, &s);
+    if (s)
+        VirtualFree(p2, s, MEM_DECOMMIT);
     
     int bin = __builtin_ctzll(n);
     

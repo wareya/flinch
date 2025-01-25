@@ -788,7 +788,7 @@ inline static void * _gc_raw_malloc(size_t n)
     if (!n || n > 0x100000000000) return 0;
     //n = std::bit_ceil(n);
     
-    n = (n+31)/32*32;
+    if (n < 32) n = 32;
     n = 1ULL << (64-__builtin_clzll(n-1));
     int bin = __builtin_ctzll(n);
     

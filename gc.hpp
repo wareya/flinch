@@ -79,27 +79,23 @@ struct GcAllocHeader
 {
     size_t ** next;
     size_t size;
-    //size_t color;
     GcTraceFunc tracefn;
     size_t tracefndat;
 };
 
 typedef GcAllocHeader * GcAllocHeaderPtr;
 
-enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
-//#define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8*8)
+enum { GC_GREY, GC_WHITE, GC_BLACK, GC_RED };
 #define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8)
 #define GCOFFS (sizeof(size_t *)*GCOFFS_W)
 
 static inline void _gc_set_color(char * p, uint8_t color)
 {
-    //GcAllocHeaderPtr(p-GCOFFS)->color = color;
-    ((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7] = color;
+    std::atomic_ref(((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7]).store(color, std::memory_order_release);
 }
 static inline uint8_t _gc_get_color(char * p)
 {
-    //auto ret = GcAllocHeaderPtr(p-GCOFFS)->color;
-    auto ret = ((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7];
+    auto ret = std::atomic_ref(((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7]).load(std::memory_order_acquire);
     return ret;
 }
 
@@ -168,12 +164,6 @@ static inline void _free(void * p)
     _gc_raw_free(p);
 }
 
-#define Ptr(X) X *
-#define PtrCast(X, Y) (X *)(Y)
-#define PtrBase(X) (X)
-#define ISTEMPLATE 0
-
-
 //#define GC_TABLE_HASH(X) (((((X)+1)*123454321)>>6)&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((((X)+1)*123454321)>>5)&(GC_TABLE_SIZE - 1))
 //#define GC_TABLE_HASH(X) (((((X)+1)*123454321)>>8)&(GC_TABLE_SIZE - 1))
@@ -189,25 +179,30 @@ static inline void _free(void * p)
 
 static size_t GC_TABLE_BITS = 16ULL;
 static size_t GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
-static size_t *** gc_table = (size_t ***)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
+static std::atomic<size_t **>* gc_table = (std::atomic<size_t **>*)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(std::atomic<size_t **>));
 
-static inline int _gc_table_push(char * p)
+static inline void _gc_table_push(char * p)
 {
     enforce_not_main_thread();
     size_t k = GC_TABLE_HASH((size_t)p);
     
-    int ret = !!gc_table[k];
-    GcAllocHeaderPtr(p-GCOFFS)->next = gc_table[k];
-    gc_table[k] = ((size_t **)p);
-    return ret;
+    //GcAllocHeaderPtr(p-GCOFFS)->next = gc_table[k];
+    //gc_table[k] = ((size_t **)p);
+
+    auto gp = GcAllocHeaderPtr(p-GCOFFS);
+    
+    do
+    {
+        std::atomic_ref(gp->next).store(gc_table[k].load(std::memory_order_acquire), std::memory_order_release);
+    } while (!gc_table[k].compare_exchange_weak(*(size_t ***)&gp->next, (size_t **)p, std::memory_order_release, std::memory_order_acquire));
 }
 static inline size_t ** _gc_table_get(char * p)
 {
     enforce_not_main_thread();
     size_t k = GC_TABLE_HASH((size_t)p);
-    size_t ** next = gc_table[k];
+    size_t ** next = gc_table[k].load(std::memory_order_acquire);
     while (next && next != (size_t **)p)
-        next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
+        next = std::atomic_ref(GcAllocHeaderPtr(next-GCOFFS_W)->next).load(std::memory_order_acquire);
     return next;
 }
 
@@ -221,11 +216,11 @@ static double secs_mark = 0.0;
 static double secs_sweep = 0.0;
 
 #ifndef GC_MSG_QUEUE_SIZE
-// number of allocations (size-adjusted) before GC happens
-// larger number = more hash table collisions, better use of context switches
-// lower number = more context switches and worse cache usage, shorter individual pauses
-// default: 75000
-#define GC_MSG_QUEUE_SIZE 75000
+#define GC_MSG_QUEUE_SIZE 1000
+#endif
+
+#ifndef GC_INSENSITIVITY
+#define GC_INSENSITIVITY 75000
 #endif
 
 struct _GcCmdlist {
@@ -234,9 +229,9 @@ struct _GcCmdlist {
     size_t len = 0;
 };
 
-_GcCmdlist gc_cmd; // write
+thread_local static _GcCmdlist gc_cmd;
 
-std::atomic_uint32_t _gc_baton_atomic = 0;
+static std::atomic_uint32_t _gc_baton_atomic = 0;
 
 // called by gc thread
 static inline void _gc_safepoint_lock()
@@ -258,33 +253,63 @@ static inline void _gc_safepoint_unlock()
 
 static void _gc_safepoint_impl()
 {
-    #ifdef COLLECT_STATS
-    double start = get_time();
-    #endif
-    
-    fence();
     while (!_gc_baton_atomic) { fence(); }
     safepoint_mutex.unlock();
     while (_gc_baton_atomic) { fence(); }
     safepoint_mutex.lock();
-    fence();
+}
 
-    #ifdef COLLECT_STATS
-    double pause_time = get_time() - start;
-    secs_pause += pause_time;
-    if (pause_time > max_pause_time) max_pause_time = pause_time;
-    #endif
+static inline void _gc_check_cmd()
+{
+    if (gc_cmd.len >= GC_MSG_QUEUE_SIZE)
+    {
+        #ifdef COLLECT_STATS
+        double start = get_time();
+        #endif
+        
+        for (ptrdiff_t i = gc_cmd.len; i > 0; i--)
+        {
+            _gc_set_color(gc_cmd.list[i-1], GC_GREY);
+            _gc_table_push(gc_cmd.list[i-1]);
+        }
+        gc_cmd.len = 0;
+    
+        #ifdef COLLECT_STATS
+        double pause_time = get_time() - start;
+        secs_cmd += pause_time;
+        if (pause_time > max_pause_time) max_pause_time = pause_time;
+        #endif
+    }
 }
 
 static inline void _gc_safepoint(size_t inc)
 {
     static size_t n = 0;
     n = n+inc;
-    if (n >= GC_MSG_QUEUE_SIZE)
+    if (n >= GC_INSENSITIVITY)
     {
+        #ifdef COLLECT_STATS
+        double start = get_time();
+        #endif
+        
+        for (ptrdiff_t i = gc_cmd.len; i > 0; i--)
+        {
+            _gc_set_color(gc_cmd.list[i-1], GC_WHITE);
+            _gc_table_push(gc_cmd.list[i-1]);
+        }
+        gc_cmd.len = 0;
+        
         n = 0;
         _gc_safepoint_impl();
+    
+        #ifdef COLLECT_STATS
+        double pause_time = get_time() - start;
+        secs_pause += pause_time;
+        if (pause_time > max_pause_time) max_pause_time = pause_time;
+        #endif
     }
+    else
+        _gc_check_cmd();
 }
 
 
@@ -308,6 +333,7 @@ extern "C" void * gc_malloc(size_t n)
     p += GCOFFS;
     _gc_set_size(p, n-GCOFFS);
     #endif
+    
     gc_cmd.list[gc_cmd.len++] = p;
     
     return (void *)(p);
@@ -327,14 +353,10 @@ extern "C" void gc_free(void * p)
 extern "C" void * gc_realloc(void * _p, size_t n)
 {
     char * p = (char *)_p;
-    #if ISTEMPLATE
-    if (!p) return PtrCast(char, gc_malloc(n));
-    #else
-    if (!p) return PtrCast(char, gc_malloc(n));
-    #endif
-    if (n == 0) { gc_free(p); return PtrCast(char, 0); }
+    if (!p) return gc_malloc(n);
+    if (n == 0) { gc_free(p); return 0; }
     
-    auto x = PtrCast(char, gc_malloc(n));
+    auto x = (char *)gc_malloc(n);
     assert(x);
     size_t size2 = _gc_get_size(p);
     memcpy(x, p, n < size2 ? n : size2);
@@ -360,6 +382,11 @@ static inline void gc_set_trace_func(void * alloc, GcTraceFunc fn, size_t userda
     GcAllocHeaderPtr(p)->tracefndat = userdata;
 }
 
+static inline bool _gc_color_is_traceable(uint8_t c)
+{
+    return c != GC_BLACK && c != GC_RED;
+}
+
 static size_t _main_stack_hi = 0;
 
 static std::atomic_int _gc_stop = 0;
@@ -370,10 +397,10 @@ static size_t _gc_scan_word_count = 0;
     while (start != end)\
     {\
         size_t sw = (size_t)*start;\
-        /*if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; }*/ \
+        if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; } \
         char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
-        if (v && _gc_get_color(v) < GC_BLACK)\
+        if (v && _gc_color_is_traceable(_gc_get_color(v)))\
         {\
             _gc_set_color(v, GC_GREY);\
             _gc_list_push(rootlist, v, &gc_gc_freelist);\
@@ -403,6 +430,7 @@ static inline void _gc_unsuspend_main();
 static inline unsigned long int _gc_loop(void *)
 {
     bool silent = true;
+    double fillrate = 0.0;
     while (1)
     {
         if (_gc_stop)
@@ -415,52 +443,7 @@ static inline unsigned long int _gc_loop(void *)
         Context * ctx = _gc_suspend_main_and_get_context();
         
         double start_start_time = get_time();
-        
-        /////
-        ///// initial coloring phase
-        /////
-        
-        // whitening
         double start_time = get_time();
-        size_t filled_num = 0;
-        size_t n2 = 0;
-        for (size_t k = 0; k < GC_TABLE_SIZE; k++)
-        {
-            size_t ** next = gc_table[k];
-            if (next)
-                filled_num += 1;
-            while (next)
-            {
-                _gc_set_color((char *)next, GC_WHITE);
-                next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
-                n2 += 1;
-            }
-        }
-        if (!silent) puts("whitening done");
-        
-        secs_whiten += get_time() - start_time;
-        
-        auto cr = (n2-filled_num)/double(filled_num);
-        if (!silent) printf("collision rate: %.04f%%\n", cr*100.0);
-        auto tm = (n2 > GC_TABLE_SIZE ? n2-GC_TABLE_SIZE : 0)/double(GC_TABLE_SIZE);
-        if (!silent) printf("(theoretical min): %.04f%%\n", tm*100.0);
-        auto fillrate = filled_num/double(GC_TABLE_SIZE);
-        if (!silent) printf("bin fill rate: %.04f%%\n", fillrate*100.0);
-        
-        /////
-        ///// receive hashtable update commands from main thread phase
-        /////
-        
-        start_time = get_time();
-        n2 += gc_cmd.len;
-        for (ptrdiff_t i = gc_cmd.len; i > 0; i--)
-        {
-            char * c = gc_cmd.list[i-1];
-            // will be either white (default) or red (freed)
-            filled_num += _gc_table_push(c);
-        }
-        gc_cmd.len = 0;
-        secs_cmd += get_time() - start_time;
         
         if (!silent) puts("-- cmdlist updated");
         
@@ -525,7 +508,7 @@ static inline unsigned long int _gc_loop(void *)
                 {
                     char * v = (char *)*v_;
                     _gc_scan_word_count += 1;
-                    if (v && _gc_get_color(v) < GC_BLACK)
+                    if (v && _gc_color_is_traceable(_gc_get_color(v)))
                     {
                         _gc_set_color(v, GC_GREY);
                         _gc_list_push(&rootlist, v, &gc_gc_freelist);
@@ -557,23 +540,27 @@ static inline unsigned long int _gc_loop(void *)
         if (!silent) fflush(stdout);
         start_time = get_time();
         size_t n3 = 0;
-        filled_num = 0;
+        size_t n4 = 0;
+        double filled_num = 0;
         for (size_t k = 0; k < GC_TABLE_SIZE; k++)
         {
-            if (gc_table[k])
-                filled_num += 1;
-            size_t ** next = gc_table[k];
+            size_t ** head = 0;
+            head = gc_table[k].exchange(head, std::memory_order_acq_rel);
+            if (!head) continue;
+            
+            filled_num += 1.0;
+            size_t ** next = head;
             size_t ** prev = 0;
             while (next)
             {
                 char * c = (char *)next;
                 if (_gc_get_color(c) != GC_WHITE)
                     prev = next;
-                next = GcAllocHeaderPtr(c-GCOFFS)->next;
+                next = std::atomic_ref(GcAllocHeaderPtr(c-GCOFFS)->next).load(std::memory_order_acquire);
                 if (_gc_get_color(c) == GC_WHITE)
                 {
-                    if (prev) GcAllocHeaderPtr(prev-GCOFFS_W)->next = (size_t **)next;
-                    else gc_table[k] = next;
+                    if (prev) std::atomic_ref(GcAllocHeaderPtr(prev-GCOFFS_W)->next).store((size_t **)next, std::memory_order_release);
+                    else head = next;
                     
                     #ifndef GC_NO_PREFIX
                     _free((void *)(c-GCOFFS));
@@ -582,40 +569,23 @@ static inline unsigned long int _gc_loop(void *)
                     #endif
                     n3 += 1;
                 }
+                else // initial coloring for next GC cycle
+                    _gc_set_color(c, GC_WHITE);
+                n4 += 1;
+            }
+            
+            if (prev)
+            {
+                head = gc_table[k].exchange(head);
+                std::atomic_ref(GcAllocHeaderPtr(prev-GCOFFS_W)->next).store(head, std::memory_order_release);
             }
         }
         secs_sweep += get_time() - start_time;
         
-        if (!silent) printf("number of killed allocations: %zd\n", n3);
+        if (!silent) printf("number of killed allocations: %zd (out of %zd)\n", n3, n4);
         if (!silent) fflush(stdout);
         
-        /////
-        ///// hashtable growth phase
-        /////
-        
         fillrate = filled_num/double(GC_TABLE_SIZE);
-        
-        if (fillrate > 0.95 && GC_TABLE_BITS < 60)
-        {
-            auto oldsize = GC_TABLE_SIZE;
-            GC_TABLE_BITS += 1;
-            if (!silent) printf("! growing hashtable to %zd bits........\n", GC_TABLE_BITS);
-            GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
-            size_t *** old_table = gc_table;
-            gc_table = (size_t ***)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
-            
-            for (size_t k = 0; k < oldsize; k++)
-            {
-                size_t ** next = old_table[k];
-                while (next)
-                {
-                    _gc_table_push((char *)next);
-                    next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
-                }
-            }
-            
-            _gc_raw_free(old_table);
-        }
     }
     return 0;
 }
@@ -790,6 +760,7 @@ inline static void * _gc_raw_malloc(size_t n)
     
     if (!n || n > 0x100000000000) return 0;
     //n = std::bit_ceil(n);
+    if (n < 8) n = 8;
     n = 1ULL << (64-__builtin_clzll(n-1));
     
     int bin = __builtin_ctzll(n);

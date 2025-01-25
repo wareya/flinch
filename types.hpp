@@ -1,7 +1,7 @@
 template<typename T>
-inline Ptr(T) safe_realloc(Ptr(T) ptr, size_t len)
+inline T * safe_realloc(T * ptr, size_t len)
 {
-    if (!ptr) return PtrCast(T, malloc(len));
+    if (!ptr) return (T *)malloc(len);
     if (len == 0) { free(ptr); return 0; }
     return realloc(ptr, len);
 }
@@ -158,7 +158,7 @@ ShortString operator+(const char * other, const ShortString & right)
 template<typename T, int growth_factor = 20> // growth factor is out of 10. a value of 20 means 2x. must be at least 11.
 struct PODVec
 {
-    Ptr(T) mbuffer = 0;
+    T * mbuffer = 0;
     size_t mlength = 0;
     size_t mcapacity = 0;
     
@@ -178,7 +178,7 @@ struct PODVec
     {
         mlength = count;
         mcapacity = mlength;
-        mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
+        mbuffer = (T *)malloc(sizeof(T) * mcapacity);
         for (size_t i = 0; i < count; i++)
             mbuffer[i] = value;
         
@@ -204,7 +204,7 @@ struct PODVec
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
-            mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
+            mbuffer = (T *)malloc(sizeof(T) * mcapacity);
         if (mbuffer)
         {
             for (size_t i = 0; i < mlength; i++)
@@ -229,7 +229,7 @@ struct PODVec
         mlength = other.mlength;
         mcapacity = other.mcapacity;
         if (mlength)
-            mbuffer = PtrCast(T, malloc(sizeof(T) * mlength));
+            mbuffer = (T *)malloc(sizeof(T) * mlength);
         if (mbuffer)
         {
             for (size_t i = 0; i < mlength; i++)
@@ -251,8 +251,8 @@ struct PODVec
     
     size_t size() const noexcept { return mlength; }
     size_t capacity() const noexcept { return mlength; }
-    Ptr(T) data() noexcept { return mbuffer; }
-    const Ptr(T) data() const noexcept { return mbuffer; }
+    T * data() noexcept { return mbuffer; }
+    const T * data() const noexcept { return mbuffer; }
     T * begin() noexcept { return mbuffer + 0; }
     T * end() noexcept { return mbuffer + mlength; }
     const T * begin() const noexcept { return mbuffer + 0; }
@@ -316,7 +316,7 @@ struct PODVec
     
     void do_realloc(size_t oldcap)
     {
-        auto newly = PtrCast(T, malloc(sizeof(T) * mcapacity));
+        auto newly = (T *)malloc(sizeof(T) * mcapacity);
         size_t s = oldcap;
         if (mcapacity < s)
             s = mcapacity;

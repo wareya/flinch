@@ -117,10 +117,10 @@ struct CompFunc { iword_t loc, len, varcount; };
 struct Func { iword_t loc, varcount; };
 Token make_token(TKind kind, iword_t n) { return {kind, n, 0, 0}; }
 
-typedef Ptr(PODVec<DynamicType>) ArrayData;
+typedef PODVec<DynamicType> * ArrayData;
 
 struct Ref {
-    Ptr(DynamicType) root;
+    DynamicType * root;
     size_t offs;
     DynamicType * ref();
 };
@@ -899,11 +899,11 @@ struct ProgramState {
     PODVec<iword_t> callstack;
     
     ArrayData globals;
-    Ptr(DynamicType) globals_raw;
+    DynamicType * globals_raw;
     
     PODVec<ArrayData> varstacks;
     ArrayData varstack;
-    Ptr(DynamicType) varstack_raw;
+    DynamicType * varstack_raw;
     
     PODVec<PODVec<DynamicType>> evalstacks;
     PODVec<DynamicType> evalstack;

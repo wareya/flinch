@@ -802,11 +802,14 @@ inline static void * _gc_raw_malloc(size_t n)
             p = _gc_heap_free[bin].load(std::memory_order_acquire);
         } while (p && !_gc_heap_free[bin].compare_exchange_weak(p, (char*)GcAllocHeaderPtr(p)->next, std::memory_order_release, std::memory_order_relaxed));
         
-        _gc_asan_unpoison(p, GCOFFS);
-        memset(p, 0, n + GCOFFS);
-        GcAllocHeaderPtr(p)->size = n;
-        _gc_asan_poison(p, GCOFFS);
-        return (void *)(p+GCOFFS);
+        if (p)
+        {
+            _gc_asan_unpoison(p, GCOFFS);
+            memset(p, 0, n + GCOFFS);
+            GcAllocHeaderPtr(p)->size = n;
+            _gc_asan_poison(p, GCOFFS);
+            return (void *)(p+GCOFFS);
+        }
     }
     
     // n is basic allocation size (rounded up to a power of 2)

@@ -430,7 +430,6 @@ static inline void _gc_unsuspend_main();
 static inline unsigned long int _gc_loop(void *)
 {
     bool silent = true;
-    double fillrate = 0.0;
     while (1)
     {
         if (_gc_stop)
@@ -541,14 +540,12 @@ static inline unsigned long int _gc_loop(void *)
         start_time = get_time();
         size_t n3 = 0;
         size_t n4 = 0;
-        double filled_num = 0;
         for (size_t k = 0; k < GC_TABLE_SIZE; k++)
         {
             size_t ** head = 0;
             head = gc_table[k].exchange(head, std::memory_order_acq_rel);
             if (!head) continue;
             
-            filled_num += 1.0;
             size_t ** next = head;
             size_t ** prev = 0;
             while (next)
@@ -584,8 +581,6 @@ static inline unsigned long int _gc_loop(void *)
         
         if (!silent) printf("number of killed allocations: %zd (out of %zd)\n", n3, n4);
         if (!silent) fflush(stdout);
-        
-        fillrate = filled_num/double(GC_TABLE_SIZE);
     }
     return 0;
 }
@@ -811,7 +806,7 @@ inline static void * _gc_raw_malloc(size_t n)
     
     // n is basic allocation size (rounded up to a power of 2)
     auto n2 = n + GCOFFS;
-    auto p = _gc_heap_cur.fetch_add(n2, std::memory_order_acq_rel);
+    char * p = _gc_heap_cur.fetch_add(n2, std::memory_order_acq_rel);
     // any race on the calulation of "over" will only result in a slight excess of committed memory, no unsafety
     ptrdiff_t over = p + n2 - _gc_heap_top.load(std::memory_order_relaxed);
     if (over > 0)

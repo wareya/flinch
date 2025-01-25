@@ -87,18 +87,15 @@ struct GcAllocHeader
 typedef GcAllocHeader * GcAllocHeaderPtr;
 
 enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
-//#define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8*8)
 #define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8)
 #define GCOFFS (sizeof(size_t *)*GCOFFS_W)
 
 static inline void _gc_set_color(char * p, uint8_t color)
 {
-    //GcAllocHeaderPtr(p-GCOFFS)->color = color;
     ((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7] = color;
 }
 static inline uint8_t _gc_get_color(char * p)
 {
-    //auto ret = GcAllocHeaderPtr(p-GCOFFS)->color;
     auto ret = ((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7];
     return ret;
 }
@@ -370,7 +367,7 @@ static size_t _gc_scan_word_count = 0;
     while (start != end)\
     {\
         size_t sw = (size_t)*start;\
-        /*if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; }*/ \
+        if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; } \
         char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
         if (v && _gc_get_color(v) < GC_BLACK)\
@@ -790,6 +787,7 @@ inline static void * _gc_raw_malloc(size_t n)
     
     if (!n || n > 0x100000000000) return 0;
     //n = std::bit_ceil(n);
+    if (n < 8) n = 8;
     n = 1ULL << (64-__builtin_clzll(n-1));
     
     int bin = __builtin_ctzll(n);

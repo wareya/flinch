@@ -12,7 +12,7 @@ static inline double get_time() {
     return ret;
 }
 #else
-static inline double get_time() { return 0.0 };
+static inline double get_time() { return 0.0; };
 #endif
 
 extern "C" void * gc_malloc(size_t n);
@@ -78,10 +78,10 @@ static inline void enforce_yes_main_thread()
 struct GcAllocHeader
 {
     size_t ** next;
-    uint32_t size;
-    uint32_t color;
-    size_t tracefndat;
+    size_t size;
+    //size_t color;
     GcTraceFunc tracefn;
+    size_t tracefndat;
 };
 
 typedef GcAllocHeader * GcAllocHeaderPtr;
@@ -93,11 +93,13 @@ enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
 
 static inline void _gc_set_color(char * p, uint8_t color)
 {
-    GcAllocHeaderPtr(p-GCOFFS)->color = color;
+    //GcAllocHeaderPtr(p-GCOFFS)->color = color;
+    ((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7] = color;
 }
 static inline uint8_t _gc_get_color(char * p)
 {
-    auto ret = GcAllocHeaderPtr(p-GCOFFS)->color;
+    //auto ret = GcAllocHeaderPtr(p-GCOFFS)->color;
+    auto ret = ((char *)&(GcAllocHeaderPtr(p-GCOFFS)->size))[7];
     return ret;
 }
 
@@ -108,8 +110,14 @@ static inline void _gc_set_size(char * p, size_t size)
 static inline size_t _gc_get_size(char * p)
 {
     auto ret = GcAllocHeaderPtr(p-GCOFFS)->size;
+    ret <<= 8;
+    ret >>= 8;
     return ret;
 }
+
+inline static void * _gc_raw_malloc(size_t n);
+inline static void * _gc_raw_calloc(size_t c, size_t n);
+inline static void _gc_raw_free(void * _p);
 
 struct GcListNode {
     char * val = 0;
@@ -126,7 +134,8 @@ static inline void _gc_list_push(GcListNode ** table, char * val, GcListNode ** 
         *freelist = (*freelist)->next;
     }
     else
-        newly = (GcListNode *)malloc(sizeof(GcListNode));
+        //newly = (GcListNode *)malloc(sizeof(GcListNode));
+        newly = (GcListNode *)_gc_raw_malloc(sizeof(GcListNode));
     newly->val = val;
     newly->next = *table;
     *table = newly;
@@ -145,12 +154,18 @@ static inline char * _gc_list_pop(GcListNode ** table, GcListNode ** freelist)
 static inline void * _malloc(size_t n)
 {
     enforce_yes_main_thread();
-    return calloc(1, n);
+    auto ret = _gc_raw_malloc(n);
+    #ifndef GC_CUSTOM_MALLOC
+    memset(ret, 0, n);
+    #endif
+    return ret;
+    //return calloc(1, n);
 }
 static inline void _free(void * p)
 {
     enforce_not_main_thread();
-    free(p);
+    //free(p);
+    _gc_raw_free(p);
 }
 
 #define Ptr(X) X *
@@ -174,7 +189,7 @@ static inline void _free(void * p)
 
 static size_t GC_TABLE_BITS = 16ULL;
 static size_t GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
-static size_t *** gc_table = (size_t ***)calloc(GC_TABLE_SIZE, sizeof(size_t **));
+static size_t *** gc_table = (size_t ***)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
 
 static inline int _gc_table_push(char * p)
 {
@@ -214,7 +229,8 @@ static double secs_sweep = 0.0;
 #endif
 
 struct _GcCmdlist {
-    char ** list = (char **)malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
+    //char ** list = (char **)malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
+    char ** list = (char **)_gc_raw_malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
     size_t len = 0;
 };
 
@@ -265,19 +281,27 @@ static inline void _gc_safepoint(size_t inc)
     }
 }
 
+
+//#define GC_NO_PREFIX
+
 extern "C" void * gc_malloc(size_t n)
 {
     if (!n) return 0;
-    n = (n + 63)/64*64;
+    #ifndef GC_NO_PREFIX
+    n = (n+(GCOFFS-1))/GCOFFS*GCOFFS;
+    n += GCOFFS;
+    #endif
     
     auto i = (n + 0xFF) / 0x100; // size adjustment so very large allocations act like multiple w/r/t GC timing
     _gc_safepoint(i);
     
-    char * p = (char *)_malloc(n+GCOFFS);
+    char * p = (char *)_malloc(n);
     if (!p) return 0;
     
+    #ifndef GC_NO_PREFIX
     p += GCOFFS;
-    _gc_set_size(p, n);
+    _gc_set_size(p, n-GCOFFS);
+    #endif
     gc_cmd.list[gc_cmd.len++] = p;
     
     return (void *)(p);
@@ -340,7 +364,7 @@ static size_t _gc_scan_word_count = 0;
     while (start != end)\
     {\
         size_t sw = (size_t)*start;\
-        if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; }\
+        /*if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; }*/ \
         char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
         if (v && _gc_get_color(v) < GC_BLACK)\
@@ -590,7 +614,11 @@ static inline unsigned long int _gc_loop(void *)
         #ifdef USE_DISPOSAL_THREAD
                     _disposal_list.push_back((void *)(c-GCOFFS));
         #else
+                    #ifndef GC_NO_PREFIX
                     _free((void *)(c-GCOFFS));
+                    #else
+                    _free((void *)c);
+                    #endif
         #endif
                     n3 += 1;
                 }
@@ -617,7 +645,7 @@ static inline unsigned long int _gc_loop(void *)
             if (!silent) printf("! growing hashtable to %zd bits........\n", GC_TABLE_BITS);
             GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
             size_t *** old_table = gc_table;
-            gc_table = (size_t ***)calloc(GC_TABLE_SIZE, sizeof(size_t **));
+            gc_table = (size_t ***)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
             
             for (size_t k = 0; k < oldsize; k++)
             {
@@ -629,7 +657,7 @@ static inline unsigned long int _gc_loop(void *)
                 }
             }
             
-            free(old_table);
+            _gc_raw_free(old_table);
         }
     }
     return 0;
@@ -773,3 +801,125 @@ extern "C" int gc_end()
     return 0;
 }
 
+static size_t _gc_os_page_size = 0;
+static char * _gc_heap_base = 0;
+static char * _gc_heap_cur = 0;
+static char * _gc_heap_top = 0;
+static std::atomic<char *> _gc_heap_free[64] = {};
+struct CharP { char * p; };
+static inline CharP _gc_os_init_heap()
+{
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    _gc_os_page_size = info.dwPageSize;
+    // 16 TiB should be enough for anybody
+    auto ret = (char *)VirtualAlloc(0, 0x100000000000, MEM_RESERVE, PAGE_READWRITE);
+    assert(ret);
+    _gc_heap_base = ret;
+    _gc_heap_cur = ret;
+    _gc_heap_top = ret;
+    for (size_t i = 0; i < 64; i++)
+        assert(_gc_heap_free[i] == 0);
+    return CharP{ret};
+}
+static CharP _gc_heap_base_s __attribute__((init_priority(101))) = _gc_os_init_heap();
+
+#include <bit>
+
+std::mutex _gc_malloc_mtx;
+
+#if (__has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)) && !defined(GC_NO_PREFIX)
+#include <sanitizer/asan_interface.h>
+void _gc_asan_poison(void * a, size_t n) { ASAN_POISON_MEMORY_REGION(a, n); }
+void _gc_asan_unpoison(void * a, size_t n) { ASAN_UNPOISON_MEMORY_REGION(a, n); }
+#else
+void _gc_asan_unpoison(void *, size_t) { }
+void _gc_asan_poison(void *, size_t) { }
+#endif
+
+inline static void * _gc_raw_malloc(size_t n)
+{
+    #ifndef GC_CUSTOM_MALLOC
+    return malloc(n);
+    
+    #else
+    
+    if (!n || n > 0x100000000000) return 0;
+    //n = std::bit_ceil(n);
+    n = 1ULL << (64-__builtin_clzll(n-1));
+    
+    int bin = __builtin_ctzll(n);
+    
+    if (_gc_heap_free[bin].load(std::memory_order_relaxed))
+    {
+        char * p;
+        do {
+            p = _gc_heap_free[bin].load(std::memory_order_relaxed);
+        } while (p && !_gc_heap_free[bin].compare_exchange_weak(p, (char*)GcAllocHeaderPtr(p)->next, std::memory_order_relaxed, std::memory_order_relaxed));
+        
+        _gc_asan_unpoison(p, GCOFFS);
+        memset(p, 0, n + GCOFFS);
+        GcAllocHeaderPtr(p)->size = n;
+        _gc_asan_poison(p, GCOFFS);
+        return (void *)(p+GCOFFS);
+    }
+    
+    ptrdiff_t over = _gc_heap_cur + n + GCOFFS - _gc_heap_top;
+    if (over > 0)
+    {
+        over = (over + (_gc_os_page_size - 1))/_gc_os_page_size*_gc_os_page_size;
+        assert(VirtualAlloc(_gc_heap_top, over, MEM_COMMIT, PAGE_READWRITE));
+        _gc_heap_top += over;
+    }
+    
+    auto p = _gc_heap_cur;
+    _gc_heap_cur += n + GCOFFS;
+    GcAllocHeaderPtr(p)->size = n;
+    // already zeroed by the OS
+    
+    _gc_asan_poison(p, GCOFFS);
+    
+    return (void *)(p+GCOFFS);
+    #endif
+}
+inline static void * _gc_raw_calloc(size_t c, size_t n)
+{
+    #ifndef GC_CUSTOM_MALLOC
+    return calloc(c, n);
+    
+    #else
+    
+    auto r = _gc_raw_malloc(c*n);
+    return r;
+    #endif
+}
+inline static void _gc_raw_free(void * _p)
+{
+    #ifndef GC_CUSTOM_MALLOC
+    return free(_p);
+    
+    #else
+    
+    if (!_p) return;
+    char * p = ((char *)_p)-GCOFFS;
+    
+    _gc_asan_unpoison(p, GCOFFS);
+    
+    GcAllocHeaderPtr(p)->size <<= 8;
+    GcAllocHeaderPtr(p)->size >>= 8;
+    
+    size_t n = GcAllocHeaderPtr(p)->size;
+    //n = std::bit_ceil(n);
+    n = 1ULL << (64-__builtin_clzll(n-1));
+    
+    int bin = __builtin_ctzll(n);
+    
+    auto gp = GcAllocHeaderPtr(p);
+    do
+    {
+        gp->next = (size_t **)_gc_heap_free[bin].load(std::memory_order_relaxed);
+    } while (!_gc_heap_free[bin].compare_exchange_weak(*(char **)&gp->next, (char *)gp, std::memory_order_relaxed, std::memory_order_relaxed));
+    
+    _gc_asan_poison(p, GCOFFS);
+    #endif
+}

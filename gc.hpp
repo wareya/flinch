@@ -393,45 +393,6 @@ void _gc_scan_unsanitary(size_t * stack, size_t * stack_top, GcListNode ** rootl
     _GC_SCAN(stack, stack_top, rootlist)
 }
 
- 
-//#define USE_DISPOSAL_THREAD
-
-#ifdef USE_DISPOSAL_THREAD
-std::vector<void *> _disposal_list;
-std::mutex _disposal_list_mtx;
-static inline unsigned long int _disposal_loop(void *)
-{
-    while (1)
-    {
-        if (_gc_stop)
-            return 0;
-        
-        _disposal_list_mtx.lock();
-        if (!_disposal_list.size())
-        {
-            _disposal_list_mtx.unlock();
-            Sleep(1);
-            continue;
-        }
-        size_t i = 0;
-        while (_disposal_list.size())
-        {
-            free(_disposal_list.back());
-            _disposal_list.pop_back();
-            i++;
-            if ((i & 0x3FFF) == 0)
-            {
-                _disposal_list_mtx.unlock();
-                Sleep(0);
-                _disposal_list_mtx.lock();
-            }
-        }
-        _disposal_list = {};
-        _disposal_list_mtx.unlock();
-    }
-}
-#endif
-
 struct Context;
 static inline size_t _gc_context_size;
 static inline Context * _gc_suspend_main_and_get_context();
@@ -594,9 +555,6 @@ static inline unsigned long int _gc_loop(void *)
         
         if (!silent) printf("number of found allocations: %zd over %zd words\n", n, _gc_scan_word_count);
         if (!silent) fflush(stdout);
-        #ifdef USE_DISPOSAL_THREAD
-        _disposal_list_mtx.lock();
-        #endif
         start_time = get_time();
         size_t n3 = 0;
         filled_num = 0;
@@ -617,22 +575,15 @@ static inline unsigned long int _gc_loop(void *)
                     if (prev) GcAllocHeaderPtr(prev-GCOFFS_W)->next = (size_t **)next;
                     else gc_table[k] = next;
                     
-        #ifdef USE_DISPOSAL_THREAD
-                    _disposal_list.push_back((void *)(c-GCOFFS));
-        #else
                     #ifndef GC_NO_PREFIX
                     _free((void *)(c-GCOFFS));
                     #else
                     _free((void *)c);
                     #endif
-        #endif
                     n3 += 1;
                 }
             }
         }
-        #ifdef USE_DISPOSAL_THREAD
-        _disposal_list_mtx.unlock();
-        #endif
         secs_sweep += get_time() - start_time;
         
         if (!silent) printf("number of killed allocations: %zd\n", n3);
@@ -759,9 +710,6 @@ static inline void gc_run_startup()
 }
 
 static size_t _gc_thread = 0;
-#ifdef USE_DISPOSAL_THREAD
-static size_t _disposal_thread = 0;
-#endif
 extern "C" int gc_start()
 {
     _gc_get_data_sections();
@@ -775,10 +723,6 @@ extern "C" int gc_start()
     wasted_seconds = 0.0;
     _gc_thread = (size_t)CreateThread(0, 0, &_gc_loop, 0, 0, 0);
     assert(_gc_thread);
-    #ifdef USE_DISPOSAL_THREAD
-    _disposal_thread = (size_t)CreateThread(0, 0, &_disposal_loop, 0, 0, 0);
-    assert(_disposal_thread);
-    #endif
     return 0;
 }
 extern "C" int gc_end()
@@ -788,14 +732,6 @@ extern "C" int gc_end()
     fence();
     CloseHandle((HANDLE)_gc_thread);
     _gc_thread = 0;
-    #ifdef USE_DISPOSAL_THREAD
-    WaitForSingleObject((HANDLE)_disposal_thread, 0);
-    _disposal_list_mtx.lock();
-    fence();
-    _disposal_list_mtx.unlock();
-    CloseHandle((HANDLE)_disposal_thread);
-    _disposal_thread = 0;
-    #endif
     
     fence();
     _gc_stop = 0;

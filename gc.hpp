@@ -794,6 +794,7 @@ inline static void * _gc_raw_malloc(size_t n)
     
     int bin = __builtin_ctzll(n);
     
+    // any data race on this read will merely result in a missed freedlist reusage
     if (_gc_heap_free[bin].load(std::memory_order_relaxed))
     {
         char * p;

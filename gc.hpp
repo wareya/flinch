@@ -397,7 +397,7 @@ static size_t _gc_scan_word_count = 0;
     while (start != end)\
     {\
         size_t sw = (size_t)*start;\
-        if (sw < GCOFFS || (sw & 0x7)) { start += 1; continue; } \
+        if (sw < GCOFFS || (sw & 0x1f)) { start += 1; continue; } \
         char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
         if (v && _gc_color_is_traceable(_gc_get_color(v)))\
@@ -760,7 +760,7 @@ inline static void * _gc_raw_malloc(size_t n)
     
     if (!n || n > 0x100000000000) return 0;
     //n = std::bit_ceil(n);
-    if (n < 8) n = 8;
+    if (n < 32) n = 32;
     n = 1ULL << (64-__builtin_clzll(n-1));
     
     int bin = __builtin_ctzll(n);

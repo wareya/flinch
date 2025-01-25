@@ -747,8 +747,8 @@ static GcCanary _gc_canary __attribute__((init_priority(102))) = GcCanary();
 
 static size_t _gc_os_page_size = 0;
 static char * _gc_heap_base = 0;
-static char * _gc_heap_cur = 0;
-static char * _gc_heap_top = 0;
+static std::atomic<char *> _gc_heap_cur = 0;
+static std::atomic<char *> _gc_heap_top = 0;
 static std::atomic<char *> _gc_heap_free[64] = {};
 struct CharP { char * p; };
 static inline CharP _gc_os_init_heap()
@@ -760,8 +760,8 @@ static inline CharP _gc_os_init_heap()
     auto ret = (char *)VirtualAlloc(0, 0x100000000000, MEM_RESERVE, PAGE_READWRITE);
     assert(ret);
     _gc_heap_base = ret;
-    _gc_heap_cur = ret;
-    _gc_heap_top = ret;
+    _gc_heap_cur.store(ret);
+    _gc_heap_top.store(ret);
     for (size_t i = 0; i < 64; i++)
         assert(_gc_heap_free[i] == 0);
     return CharP{ret};
@@ -808,16 +808,17 @@ inline static void * _gc_raw_malloc(size_t n)
         return (void *)(p+GCOFFS);
     }
     
-    ptrdiff_t over = _gc_heap_cur + n + GCOFFS - _gc_heap_top;
+    // n is basic allocation size (rounded up to a power of 2)
+    auto n2 = n + GCOFFS;
+    auto p = _gc_heap_cur.fetch_add(n2, std::memory_order_acq_rel);
+    // any race on the calulation of "over" will only result in a slight excess of committed memory, no unsafety
+    ptrdiff_t over = p + n2 - _gc_heap_top.load(std::memory_order_relaxed);
     if (over > 0)
     {
         over = (over + (_gc_os_page_size - 1))/_gc_os_page_size*_gc_os_page_size;
-        assert(VirtualAlloc(_gc_heap_top, over, MEM_COMMIT, PAGE_READWRITE));
-        _gc_heap_top += over;
+        assert(VirtualAlloc(_gc_heap_top.fetch_add(over, std::memory_order_acq_rel), over, MEM_COMMIT, PAGE_READWRITE));
     }
     
-    auto p = _gc_heap_cur;
-    _gc_heap_cur += n + GCOFFS;
     GcAllocHeaderPtr(p)->size = n;
     // already zeroed by the OS
     

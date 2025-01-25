@@ -413,48 +413,18 @@ static inline unsigned long int _gc_loop(void *)
         
         double start_start_time = get_time();
         
-        /////
-        ///// initial coloring phase
-        /////
-        
-        // whitening
-        double start_time = get_time();
-        size_t filled_num = 0;
-        size_t n2 = 0;
-        for (size_t k = 0; k < GC_TABLE_SIZE; k++)
-        {
-            size_t ** next = gc_table[k];
-            if (next)
-                filled_num += 1;
-            while (next)
-            {
-                _gc_set_color((char *)next, GC_WHITE);
-                next = GcAllocHeaderPtr(next-GCOFFS_W)->next;
-                n2 += 1;
-            }
-        }
-        if (!silent) puts("whitening done");
-        
-        secs_whiten += get_time() - start_time;
-        
-        auto cr = (n2-filled_num)/double(filled_num);
-        if (!silent) printf("collision rate: %.04f%%\n", cr*100.0);
-        auto tm = (n2 > GC_TABLE_SIZE ? n2-GC_TABLE_SIZE : 0)/double(GC_TABLE_SIZE);
-        if (!silent) printf("(theoretical min): %.04f%%\n", tm*100.0);
-        auto fillrate = filled_num/double(GC_TABLE_SIZE);
-        if (!silent) printf("bin fill rate: %.04f%%\n", fillrate*100.0);
+        double start_time;
         
         /////
         ///// receive hashtable update commands from main thread phase
         /////
         
         start_time = get_time();
-        n2 += gc_cmd.len;
         for (ptrdiff_t i = gc_cmd.len; i > 0; i--)
         {
             char * c = gc_cmd.list[i-1];
             // will be either white (default) or red (freed)
-            filled_num += _gc_table_push(c);
+            _gc_table_push(c);
         }
         gc_cmd.len = 0;
         secs_cmd += get_time() - start_time;
@@ -554,7 +524,7 @@ static inline unsigned long int _gc_loop(void *)
         if (!silent) fflush(stdout);
         start_time = get_time();
         size_t n3 = 0;
-        filled_num = 0;
+        size_t filled_num = 0;
         for (size_t k = 0; k < GC_TABLE_SIZE; k++)
         {
             if (gc_table[k])
@@ -579,6 +549,8 @@ static inline unsigned long int _gc_loop(void *)
                     #endif
                     n3 += 1;
                 }
+                else // set color for next cycle
+                    _gc_set_color(c, GC_WHITE);
             }
         }
         secs_sweep += get_time() - start_time;
@@ -590,7 +562,7 @@ static inline unsigned long int _gc_loop(void *)
         ///// hashtable growth phase
         /////
         
-        fillrate = filled_num/double(GC_TABLE_SIZE);
+        double fillrate = filled_num/double(GC_TABLE_SIZE);
         
         if (fillrate > 0.95 && GC_TABLE_BITS < 60)
         {

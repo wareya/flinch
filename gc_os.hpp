@@ -1,7 +1,7 @@
 #ifndef _GC_OS_HPP
 #define _GC_OS_HPP
 
-#ifdef WIN32
+#ifdef _WIN32
 
 #define WIN32_LEAN_AND_MEAN
 #define VC_EXTRALEAN

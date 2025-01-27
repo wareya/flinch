@@ -163,8 +163,6 @@ static CharP _gc_heap_base_s __attribute__((init_priority(101))) = _gc_os_init_h
 
 #include <bit>
 
-std::mutex _gc_malloc_mtx;
-
 #if (__has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)) && !defined(GC_NO_PREFIX)
 #include <sanitizer/asan_interface.h>
 void _gc_asan_poison(void * a, size_t n) { ASAN_POISON_MEMORY_REGION(a, n); }
@@ -191,7 +189,7 @@ inline static void _gc_rawmal_inner_pages(char ** p, size_t * s)
     *s = page_count << _gc_os_page_size_log2;
 }
 
-inline static void * _gc_raw_malloc(size_t n)
+extern "C" void * _gc_raw_malloc(size_t n)
 {
     #ifndef GC_CUSTOM_MALLOC
     return malloc(n);
@@ -315,9 +313,6 @@ inline static void _gc_raw_free(void * _p)
 struct Context { struct ucontext_t ctx; };
 static Context _gc_ctx = {};
 
-#define DUMPCONTEXT_IF_NEEDED 
-#define UNDUMPCONTEXT_IF_NEEDED  
-
 static pid_t _current_pid;
 
 static inline Context * _gc_suspend_main_and_get_context()
@@ -341,20 +336,13 @@ static inline void _gc_unsuspend_main()
 
 static inline void _gc_safepoint_impl_os()
 {
-    assert(!getcontext(&_gc_ctx.ctx));
-    volatile ucontext_t ctx = _gc_ctx.ctx;
-    
-    while (!_gc_baton_atomic) { fence(); }
+    while (!_gc_baton_atomic) { }
     safepoint_mutex.unlock();
-    while (_gc_baton_atomic) { fence(); }
-    fence();
+    assert(!getcontext(&_gc_ctx.ctx));
+    while (_gc_baton_atomic) { }
     safepoint_mutex.lock(); // this is the point at which the main thread gets """suspended"""
     // and unsuspended
-    fence();
-    
-    memmove((void *)&ctx, (void *)&ctx, sizeof(Context)); // ensure still on stack
 }
-
 
 static inline size_t _gc_get_heap_start();
 static inline void _gc_get_data_sections()
@@ -476,10 +464,11 @@ static inline CharP _gc_os_init_heap()
 {
     _gc_os_page_size = (size_t)sysconf(_SC_PAGESIZE);
     _gc_os_page_size_log2 = 64-__builtin_clzll(_gc_os_page_size-1);
-    printf("%zd\n", _gc_os_page_size_log2);
+    printf("%zd %zd\n", _gc_os_page_size, _gc_os_page_size_log2);
     // 16 TiB should be enough for anybody
     auto ret = (char *)mmap(0, 0x100000000000, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    assert(ret);
+    //auto ret = (char *)0x100000000000;
+    assert((size_t)ret != (size_t)-1);
     _gc_heap_base = ret;
     _gc_heap_cur.store(ret);
     _gc_heap_top.store(ret);
@@ -490,8 +479,6 @@ static inline CharP _gc_os_init_heap()
 static CharP _gc_heap_base_s __attribute__((init_priority(101))) = _gc_os_init_heap();
 
 #include <bit>
-
-std::mutex _gc_malloc_mtx;
 
 #if (__has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)) && !defined(GC_NO_PREFIX)
 #include <sanitizer/asan_interface.h>
@@ -519,7 +506,7 @@ inline static void _gc_rawmal_inner_pages(char ** p, size_t * s)
     *s = page_count << _gc_os_page_size_log2;
 }
 
-inline static void * _gc_raw_malloc(size_t n)
+extern "C" void * _gc_raw_malloc(size_t n)
 {
     #ifndef GC_CUSTOM_MALLOC
     return malloc(n);
@@ -548,17 +535,19 @@ inline static void * _gc_raw_malloc(size_t n)
             char * p2 = p+GCOFFS;
             size_t s = n;
             _gc_rawmal_inner_pages(&p2, &s);
-            /*
+            
+#ifndef GC_LINUX_NO_PROT_NONE
             if (s)
-                //mmap(p2, s, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            {
+                //if ((void *)(size_t)-1 == mmap(p2, s, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
                 if (mprotect(p2, s, PROT_READ | PROT_WRITE))
                 {
-                    printf("%zd\n", errno);
+                    printf("%d\n", errno);
                     assert(0);
                 }
-            */
+            }
+#endif
             
-            memset(p, 0, n + GCOFFS);
             GcAllocHeaderPtr(p)->size = n;
             _gc_asan_poison(p, GCOFFS);
             return (void *)(p+GCOFFS);
@@ -574,16 +563,16 @@ inline static void * _gc_raw_malloc(size_t n)
     {
         over = (over + (_gc_os_page_size - 1))/_gc_os_page_size*_gc_os_page_size;
         auto loc = _gc_heap_top.fetch_add(over, std::memory_order_acq_rel);
-        //mmap(loc, over, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        //if ((void *)(size_t)-1 == mmap(loc, over, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0))
         if (mprotect(loc, over, PROT_READ | PROT_WRITE))
         {
-            //printf("%zd\n", errno);
+            printf("%d\n", errno);
             assert(0);
         }
     }
     
-    GcAllocHeaderPtr(p)->size = n;
     // already zeroed by the OS
+    GcAllocHeaderPtr(p)->size = n;
     
     _gc_asan_poison(p, GCOFFS);
     
@@ -619,15 +608,33 @@ inline static void _gc_raw_free(void * _p)
     size_t n = GcAllocHeaderPtr(p)->size;
     //n = std::bit_ceil(n);
     n = 1ULL << (64-__builtin_clzll(n-1));
+    int bin = __builtin_ctzll(n);
+    
     
     char * p2 = p+GCOFFS;
     size_t s = n;
     _gc_rawmal_inner_pages(&p2, &s);
+#ifdef GC_LINUX_NO_MADV_FREE
+    memset(p, 0, n + GCOFFS);
+#ifndef GC_LINUX_NO_PROT_NONE
+    if (s) mprotect(p2, s, PROT_NONE);
+#endif
+#else
     if (s)
-        //madvise(p2, s, MADV_DONTNEED);
+    {
+        memset(p, 0, p2-p);
+        memset(p2+s, 0, p+n+GCOFFS-(p2+s));
+        
+#ifndef GC_LINUX_NO_PROT_NONE
+        if (s) mprotect(p2, s, PROT_NONE);
+#endif
         madvise(p2, s, MADV_FREE);
-    
-    int bin = __builtin_ctzll(n);
+        //mprotect(p2, s, PROT_READ | PROT_WRITE);
+        //munmap(p2, s);
+    }
+    else
+        memset(p, 0, n + GCOFFS);
+#endif
     
     auto gp = GcAllocHeaderPtr(p);
     do

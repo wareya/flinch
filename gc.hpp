@@ -1,4 +1,5 @@
 #include <mutex>
+#include <shared_mutex>
 #include <atomic>
 #include <thread>
 #include <assert.h>
@@ -40,9 +41,56 @@ static inline void gc_set_trace_func(void * alloc, GcTraceFunc fn, size_t userda
 // Size is in words, not bytes
 static inline void gc_add_custom_root_region(void ** alloc, size_t size);
 
-
-std::mutex safepoint_mutex;
 static inline void fence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
+
+#if (!defined(_WIN32)) && defined(GC_USE_LAZY_SPINLOCK)
+    // faster than std::mutex (linux only)
+    #include <unistd.h>
+    struct LazySpinLock
+    {
+        std::atomic_flag locked = ATOMIC_FLAG_INIT;
+        void lock() { while (locked.test_and_set(std::memory_order_acq_rel)) { sleep(0); } }
+        void unlock() { locked.clear(std::memory_order_release); }
+    };
+    typedef LazySpinLock Mutex;
+#elif (defined(_WIN32)) && defined(GC_USE_LAZY_SPINLOCK)
+    // slower than std::mutex
+    #include <thread>
+    struct LazySpinLock
+    {
+        std::atomic_flag locked = ATOMIC_FLAG_INIT;
+        void lock() { while (locked.test_and_set(std::memory_order_acq_rel)) { std::this_thread::yield(); } }
+        void unlock() { locked.clear(std::memory_order_release); }
+    };
+    typedef LazySpinLock Mutex;
+#elif (!defined(_WIN32)) && defined(GC_USE_WAIT_LOCK)
+    // very very slightly faster than std::mutex, but only on linux. on windows, catastrophically slower (3x program runtime!!!!)
+    struct WaitLock
+    {
+        std::atomic_int locked = 0;
+        void lock()
+        {
+            int expected = 0;
+            if (!locked.compare_exchange_strong(expected, 1, std::memory_order_acq_rel))
+            {
+                do {
+                    expected = 0;
+                    locked.wait(1, std::memory_order_acquire);
+                } while (!locked.compare_exchange_weak(expected, 1, std::memory_order_acq_rel));
+            }
+        }
+        void unlock()
+        {
+            locked.store(0, std::memory_order_release);
+            locked.notify_one();
+        }
+    };
+    typedef WaitLock Mutex;
+#else
+    typedef std::mutex Mutex;
+#endif
+
+Mutex safepoint_mutex;
 static inline int _gc_m_d_m_d() { fence(); safepoint_mutex.lock(); fence(); return 0; }
 static int _mutex_dummy = _gc_m_d_m_d();
 
@@ -112,7 +160,7 @@ static inline size_t _gc_get_size(char * p)
     return ret;
 }
 
-inline static void * _gc_raw_malloc(size_t n);
+extern "C" void * _gc_raw_malloc(size_t n);
 inline static void * _gc_raw_calloc(size_t c, size_t n);
 inline static void _gc_raw_free(void * _p);
 
@@ -244,15 +292,19 @@ static inline void _gc_safepoint_lock()
     fence();
 }
 // called by gc thread
+static inline void _gc_safepoint_confirm()
+{
+    _gc_baton_atomic = 0;
+}
+// called by gc thread
 static inline void _gc_safepoint_unlock()
 {
     fence();
     safepoint_mutex.unlock();
-    _gc_baton_atomic = 0;
     fence();
 }
-// called by main thread
 
+// called by main thread
 static void _gc_safepoint_impl_os();
 static void _gc_safepoint_impl()
 {
@@ -407,6 +459,8 @@ static inline unsigned long int _gc_loop(void *)
         
         _gc_safepoint_lock();
         Context * ctx = _gc_suspend_main_and_get_context();
+        _gc_safepoint_confirm();
+        fence();
         
         double start_start_time = get_time();
         

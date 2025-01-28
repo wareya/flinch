@@ -6,7 +6,8 @@
 
 #ifdef COLLECT_STATS
 #include <chrono>
-static inline double get_time() {
+static inline double get_time()
+{
     auto now = std::chrono::high_resolution_clock::now();
     auto duration = now.time_since_epoch();
     double ret = std::chrono::duration<double>(duration).count();

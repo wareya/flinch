@@ -629,7 +629,6 @@ inline static void _gc_raw_free(void * _p)
         if (s) mprotect(p2, s, PROT_NONE);
 #endif
         madvise(p2, s, MADV_DONTNEED);
-        madvise(p2, s, MADV_FREE);
         //mprotect(p2, s, PROT_READ | PROT_WRITE);
         //munmap(p2, s);
     }

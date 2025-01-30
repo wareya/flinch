@@ -44,6 +44,16 @@ static inline void gc_add_custom_root_region(void ** alloc, size_t size);
 
 static inline void fence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
 
+#define WALLOC_CUSTOMHEADER
+struct WAllocHeader
+{
+    size_t size;
+    size_t ** next;
+    GcTraceFunc tracefn;
+    size_t tracefndat;
+};
+#include "wmalloc.hpp"
+
 #if (!defined(_WIN32)) && defined(GC_USE_LAZY_SPINLOCK)
     // faster than std::mutex (linux only)
     #include <unistd.h>
@@ -124,16 +134,8 @@ static inline void enforce_yes_main_thread()
     assert(x);
 }
 
-struct GcAllocHeader
-{
-    size_t ** next;
-    size_t size;
-    //size_t color;
-    GcTraceFunc tracefn;
-    size_t tracefndat;
-};
-
-typedef GcAllocHeader * GcAllocHeaderPtr;
+typedef WAllocHeader GcAllocHeader;
+typedef WAllocHeader * GcAllocHeaderPtr;
 
 enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
 #define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8)
@@ -151,19 +153,20 @@ static inline uint8_t _gc_get_color(char * p)
 
 static inline void _gc_set_size(char * p, size_t size)
 {
-    GcAllocHeaderPtr(p-GCOFFS)->size = size;
+    memcpy(&GcAllocHeaderPtr(p-GCOFFS)->size, &size, sizeof(size_t));
 }
 static inline size_t _gc_get_size(char * p)
 {
-    auto ret = GcAllocHeaderPtr(p-GCOFFS)->size;
+    size_t ret;
+    memcpy(&ret, &GcAllocHeaderPtr(p-GCOFFS)->size, sizeof(size_t));
     ret <<= 8;
     ret >>= 8;
     return ret;
 }
 
-extern "C" void * _gc_raw_malloc(size_t n);
-inline static void * _gc_raw_calloc(size_t c, size_t n);
-inline static void _gc_raw_free(void * _p);
+extern "C" void * _walloc_raw_malloc(size_t n);
+extern "C" void * _walloc_raw_calloc(size_t c, size_t n);
+extern "C" void _walloc_raw_free(void * _p);
 
 struct GcListNode {
     char * val = 0;
@@ -181,7 +184,7 @@ static inline void _gc_list_push(GcListNode ** table, char * val, GcListNode ** 
     }
     else
         //newly = (GcListNode *)malloc(sizeof(GcListNode));
-        newly = (GcListNode *)_gc_raw_malloc(sizeof(GcListNode));
+        newly = (GcListNode *)_walloc_raw_malloc(sizeof(GcListNode));
     newly->val = val;
     newly->next = *table;
     *table = newly;
@@ -200,10 +203,14 @@ static inline char * _gc_list_pop(GcListNode ** table, GcListNode ** freelist)
 static inline void * _malloc(size_t n)
 {
     enforce_yes_main_thread();
-    auto ret = _gc_raw_malloc(n);
-    #ifndef GC_CUSTOM_MALLOC
+    auto ret = _walloc_raw_malloc(n);
+    //auto h = GcAllocHeaderPtr(((char *)ret)-GCOFFS);
+    //h->tracefn = 0;
+    //h->tracefndat = 0;
+    
+    //#ifndef GC_CUSTOM_MALLOC
     memset(ret, 0, n);
-    #endif
+    //#endif
     return ret;
     //return calloc(1, n);
 }
@@ -211,7 +218,7 @@ static inline void _free(void * p)
 {
     enforce_not_main_thread();
     //free(p);
-    _gc_raw_free(p);
+    _walloc_raw_free(p);
 }
 
 #define Ptr(X) X *
@@ -235,7 +242,7 @@ static inline void _free(void * p)
 
 static size_t GC_TABLE_BITS = 16ULL;
 static size_t GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
-static size_t *** gc_table = (size_t ***)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
+static size_t *** gc_table = (size_t ***)_walloc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
 
 static inline int _gc_table_push(char * p)
 {
@@ -276,7 +283,7 @@ static double secs_sweep = 0.0;
 
 struct _GcCmdlist {
     //char ** list = (char **)malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
-    char ** list = (char **)_gc_raw_malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
+    char ** list = (char **)_walloc_raw_malloc(GC_MSG_QUEUE_SIZE * sizeof(char *));
     size_t len = 0;
 };
 
@@ -416,7 +423,7 @@ static size_t _gc_scan_word_count = 0;
     while (start != end)\
     {\
         size_t sw = (size_t)*start;\
-        if (sw < GCOFFS || (sw & 0x1f)) { start += 1; continue; } \
+        /* if (sw < GCOFFS || (sw & 0x1f)) { start += 1; continue; } */ \
         char * v = (char *)_gc_table_get((char *)sw);\
         _gc_scan_word_count += 1;\
         if (v && _gc_get_color(v) < GC_BLACK)\
@@ -625,7 +632,7 @@ static inline unsigned long int _gc_loop(void *)
             if (!silent) printf("! growing hashtable to %zd bits........\n", GC_TABLE_BITS);
             GC_TABLE_SIZE = (1ULL<<GC_TABLE_BITS);
             size_t *** old_table = gc_table;
-            gc_table = (size_t ***)_gc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
+            gc_table = (size_t ***)_walloc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
             
             for (size_t k = 0; k < oldsize; k++)
             {
@@ -637,7 +644,7 @@ static inline unsigned long int _gc_loop(void *)
                 }
             }
             
-            _gc_raw_free(old_table);
+            _walloc_raw_free(old_table);
         }
     }
     return 0;

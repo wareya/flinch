@@ -222,8 +222,20 @@ static inline void _gc_get_data_sections()
             continue;
         
         gc_add_custom_root_region((void **)start, (end-start) / sizeof(size_t));
-        //printf("%s", line);
-        //printf("%zd\n", (end-start) / sizeof(size_t));
+        /*
+        printf("%s  ", line);
+        printf("%zd\n", (end-start) / sizeof(size_t));
+        if ((end-start) / sizeof(size_t) > 100000)
+        {
+            for (size_t j = 0; j < 512; j++)
+            {
+                for (size_t i = 0; i < 16; i++)
+                    printf("%02X ", ((uint8_t *)start)[i+j]);
+                puts("");
+            }
+            puts("");
+        }
+        */
     }
     //printf("NOTE: our heap starts at %zX\n", heap_start);
 }
@@ -233,6 +245,7 @@ static inline void gc_run_startup()
     if (_main_thread != 0)
         return;
     
+    _gc_get_data_sections();
     _current_pid = getpid();
     _main_thread = gettid();
     

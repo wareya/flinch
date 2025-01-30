@@ -52,6 +52,8 @@ struct WAllocHeader
     GcTraceFunc tracefn;
     size_t tracefndat;
 };
+typedef WAllocHeader GcAllocHeader;
+typedef WAllocHeader * GcAllocHeaderPtr;
 #include "wmalloc.hpp"
 
 #if (!defined(_WIN32)) && defined(GC_USE_LAZY_SPINLOCK)
@@ -134,9 +136,6 @@ static inline void enforce_yes_main_thread()
     assert(x);
 }
 
-typedef WAllocHeader GcAllocHeader;
-typedef WAllocHeader * GcAllocHeaderPtr;
-
 enum { GC_WHITE, GC_GREY, GC_BLACK, GC_RED };
 #define GCOFFS_W ((sizeof(GcAllocHeader)+7)/8)
 #define GCOFFS (sizeof(size_t *)*GCOFFS_W)
@@ -203,13 +202,16 @@ static inline char * _gc_list_pop(GcListNode ** table, GcListNode ** freelist)
 static inline void * _malloc(size_t n)
 {
     enforce_yes_main_thread();
+    #ifdef GC_CUSTOM_MALLOC
     auto ret = _walloc_raw_malloc(n);
+    #else
+    auto ret = calloc(1, n);
+    #endif
     //auto h = GcAllocHeaderPtr(((char *)ret)-GCOFFS);
     //h->tracefn = 0;
     //h->tracefndat = 0;
     
-    //#ifndef GC_CUSTOM_MALLOC
-    memset(ret, 0, n);
+    //memset(ret, 0, n);
     //#endif
     return ret;
     //return calloc(1, n);
@@ -217,8 +219,11 @@ static inline void * _malloc(size_t n)
 static inline void _free(void * p)
 {
     enforce_not_main_thread();
-    //free(p);
+    #ifdef GC_CUSTOM_MALLOC
     _walloc_raw_free(p);
+    #else
+    free(p);
+    #endif
 }
 
 #define Ptr(X) X *

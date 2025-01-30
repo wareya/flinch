@@ -43,8 +43,6 @@ typedef WAllocHeader * WAllocHeaderPtr;
 #define WALLOC_LINUX_NO_PROT_NONE
 #endif
 
-#define WALLOC_MAXIMUM_FAST
-
 #ifdef WALLOC_FAST
 #define WALLOC_LINUX_PREUNPROTECT
 #define WALLOC_NOZERO

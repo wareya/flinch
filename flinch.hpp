@@ -31,6 +31,8 @@ struct DynamicType;
 
 #else
 
+#include <mimalloc.h>
+
 #include "gc.hpp"
 
 static inline void ** vec_dyntype_trace_func(void * alloc, void ** current, size_t i, size_t capacity);

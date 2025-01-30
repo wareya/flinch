@@ -42,6 +42,7 @@ static inline void _gc_unsuspend_main()
 static inline void _gc_safepoint_impl_os()
 {
     while (!_gc_baton_atomic) { fence(); }
+    fence();
     safepoint_mutex.unlock();
     while (_gc_baton_atomic) { fence(); }
     fence();

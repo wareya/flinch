@@ -243,11 +243,13 @@ static inline void gc_run_startup()
     pthread_attr_t attr;
     pthread_getattr_np(pthread_self(), &attr);
     pthread_attr_getstack(&attr, (void **)&lo, &size);
+    pthread_attr_destroy(&attr);
     _main_stack_hi = lo+size;
 }
 
 static inline void * _gc_loop_wrapper(void * x)
 {
+    puts("entering!");
     _gc_loop(x);
     puts("exiting...");
     fflush(stdout);
@@ -274,12 +276,16 @@ extern "C" int gc_start()
 }
 extern "C" int gc_end()
 {
-    safepoint_mutex.unlock();
-    
+    puts("going to try to exit gc");
     _gc_stop = 1;
+    safepoint_mutex.unlock();
+    puts("mutex unlocked...?");
+    
+    puts("trying to join");
     pthread_join(_gc_thread, 0);
     fence();
     _gc_thread = 0;
+    puts("got out");
     
     fence();
     _gc_stop = 0;

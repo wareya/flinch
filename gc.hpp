@@ -465,13 +465,14 @@ static inline unsigned long int _gc_loop(void *)
     bool silent = true;
     while (1)
     {
+        _gc_safepoint_lock();
+        
         if (_gc_stop)
             return 0;
         
         if (!silent) puts("-- starting GC cycle");
         if (!silent) fflush(stdout);
         
-        _gc_safepoint_lock();
         Context * ctx = _gc_suspend_main_and_get_context();
         _gc_safepoint_confirm();
         fence();

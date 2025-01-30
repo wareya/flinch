@@ -177,7 +177,15 @@ struct PODVec
     PODVec(size_t count, const T & value = T())
     {
         mlength = count;
-        mcapacity = mlength;
+        mcapacity = !!mlength;
+        while (mlength > mcapacity)
+        {
+            size_t old = mcapacity;
+            mcapacity = (mcapacity * growth_factor + 9) / 10;
+            if (mcapacity < old) break;
+        }
+        if (mlength > mcapacity) mcapacity = mlength;
+        
         mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
         for (size_t i = 0; i < count; i++)
             mbuffer[i] = value;
@@ -203,7 +211,7 @@ struct PODVec
     {
         mlength = other.mlength;
         mcapacity = other.mcapacity;
-        if (mlength)
+        if (mcapacity)
             mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
         if (mbuffer)
         {
@@ -228,8 +236,8 @@ struct PODVec
         mbuffer = 0;
         mlength = other.mlength;
         mcapacity = other.mcapacity;
-        if (mlength)
-            mbuffer = PtrCast(T, malloc(sizeof(T) * mlength));
+        if (mcapacity)
+            mbuffer = PtrCast(T, malloc(sizeof(T) * mcapacity));
         if (mbuffer)
         {
             for (size_t i = 0; i < mlength; i++)
@@ -310,7 +318,7 @@ struct PODVec
     {
         mlength -= 1;
         T ret = std::move(mbuffer[mlength]);
-        memset(mbuffer + mlength, 0, sizeof(T));
+        memset(mbuffer + mlength, 0xFF, sizeof(T));
         return ret;
     }
     
@@ -321,7 +329,7 @@ struct PODVec
         if (mcapacity < s)
             s = mcapacity;
         for (size_t i = 0; i < s; i++)
-            newly[i] = mbuffer[i];
+            newly[i] = std::move(mbuffer[i]);
         free(mbuffer);
         mbuffer = newly;
         connect_tracing_if_dyntype();
@@ -340,7 +348,7 @@ struct PODVec
         
         memset(mbuffer + (mlength-1), 0, sizeof(T));
         for (size_t j = mlength-1; j > i; j--)
-            mbuffer[j] = mbuffer[j-1];
+            mbuffer[j] = std::move(mbuffer[j-1]);
         
         memset(mbuffer + i, 0, sizeof(T));
         mbuffer[i] = std::move(item);
@@ -348,7 +356,7 @@ struct PODVec
     NOINLINE void erase_at(size_t i)
     {
         for (size_t j = i; j + 1 < mlength; j++)
-            mbuffer[j] = mbuffer[j+1];
+            mbuffer[j] = std::move(mbuffer[j+1]);
         mlength -= 1;
         memset(mbuffer + mlength, 0, sizeof(T));
     }

@@ -1056,12 +1056,6 @@ int interpreter_core(const Program & programdata, int i)
     INTERPRETER_MIDCASE(AsLocal)
         s.varstack_raw[n] = valpop();
     
-    INTERPRETER_MIDCASE(ScopeOpen)
-        s.evalstacks.push_back(std::move(s.evalstack));
-        s.evalstack = {};
-    INTERPRETER_MIDCASE(ScopeClose)
-        s.evalstack = vec_pop_back(s.evalstacks);
-    
     INTERPRETER_MIDCASE(IfGoto) valreq(2);
         Label dest = valpop().as_label();
         if (valpop()) i = dest.loc;
@@ -1169,10 +1163,16 @@ int interpreter_core(const Program & programdata, int i)
     INTERPRETER_MIDCASE(LocalVar) valpush(s.varstack_raw[n]);
     INTERPRETER_MIDCASE(GlobalVar) valpush(s.globals_raw[n]);
     
+    INTERPRETER_MIDCASE(ScopeOpen)
+        s.evalstacks.push_back(std::move(s.evalstack));
+        s.evalstack = {};
+    INTERPRETER_MIDCASE(ScopeClose)
+        s.evalstack = vec_pop_back(s.evalstacks);
+    
     INTERPRETER_MIDCASE(ArrayBuild)
         auto back = std::move(s.evalstack);
         s.evalstack = vec_pop_back(s.evalstacks);
-        valpush(make_array(make_array_data(std::move(back))));
+        valpush(make_array(make_array_data(back)));
     
     INTERPRETER_MIDCASE(ArrayEmptyLit) valpush(make_array(make_array_data()));
     

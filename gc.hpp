@@ -219,7 +219,6 @@ static inline void * _malloc(size_t n)
 static inline void _free(void * p)
 {
     enforce_not_main_thread();
-    return;
     
     #ifdef GC_CUSTOM_MALLOC
     _walloc_raw_free(p);

@@ -1,5 +1,4 @@
 #include <mutex>
-#include <condition_variable>
 #include <atomic>
 #include <thread>
 #include <assert.h>
@@ -7,6 +6,8 @@
 #ifndef NOINLINE
 #define NOINLINE __attribute__((noinline))
 #endif
+
+static inline double _gc_run_growth_threshold = 1.5;
 
 #ifdef COLLECT_STATS
 #include <chrono>
@@ -70,6 +71,9 @@ static inline void _gc_safepoint_long_end();
 
 static inline void _gc_fence() { std::atomic_thread_fence(std::memory_order_seq_cst); }
 
+static inline void _gc_awake_long_yield();
+static inline void _gc_long_yield();
+
 #define WALLOC_CUSTOMHEADER
 struct WAllocHeader
 {
@@ -81,7 +85,7 @@ struct WAllocHeader
 typedef WAllocHeader GcAllocHeader;
 typedef WAllocHeader * GcAllocHeaderPtr;
 //#define WALLOC_PULL_OVERRIDE 256
-//#define WALLOC_FLUSH_OVERRIDE 10000000000
+#define WALLOC_FLUSH_OVERRIDE 10000000000
 //#define WALLOC_FLUSH_KEEP_OVERRIDE 0
 //#define WALLOC_CACHEHINT 64
 #define WALLOC_FAST_SAFE
@@ -95,11 +99,11 @@ typedef WAllocHeader * GcAllocHeaderPtr;
     struct LazySpinLock
     {
         std::atomic_flag locked = ATOMIC_FLAG_INIT;
-        void lock() { while (locked.test_and_set(std::memory_order_acq_rel)) { sleep(0); } }
+        void lock() { while (locked.test_and_set(std::memory_order_acq_rel)) { std::this_thread::yield(); } }
         void unlock() { locked.clear(std::memory_order_release); }
     };
     typedef LazySpinLock Mutex;
-#elif (defined(_WIN32)) && defined(GC_USE_LAZY_SPINLOCK)
+#elif 0//(defined(_WIN32)) && defined(GC_USE_LAZY_SPINLOCK)
     // slower than std::mutex
     #include <thread>
     struct LazySpinLock
@@ -135,32 +139,6 @@ typedef WAllocHeader * GcAllocHeaderPtr;
 #else
     typedef std::mutex Mutex;
 #endif
-
-struct FairMutex
-{
-    Mutex mtx;
-    std::atomic_uint64_t ticker = 0;
-    std::atomic_uint64_t ticker_out = 0;
-    std::condition_variable notifier;
-    std::unique_lock<std::mutex> _m;
-    void lock()
-    {
-        auto ticket = ticker.fetch_add(1);
-        mtx.lock();
-        while (ticker_out.load() != ticket)
-        {
-            mtx.unlock();
-            notifier.wait(_m);
-            mtx.lock();
-        }
-    }
-    void unlock()
-    {
-        ticker_out.fetch_add(1);
-        mtx.unlock();
-        notifier.notify_all();
-    }
-};
 
 static inline int _gc_m_d_m_d() { _gc_fence(); return 0; }
 static int _mutex_dummy = _gc_m_d_m_d();
@@ -446,7 +424,7 @@ static bool _gc_debug_spew = 0;
 
 //#define GC_NO_PREFIX
 
-extern "C" GC_MALLOC_ATT void * gc_malloc(size_t n)
+extern "C" NOINLINE GC_MALLOC_ATT void * gc_malloc(size_t n)
 {
     if (_gc_threads_must_wait_for_gc.load()) gc_safepoint(0);
     if (!n) return 0;
@@ -514,12 +492,7 @@ static inline void _gc_add_os_root_reset()
 {
     os_roots_i = 0;
 }
-static inline void _gc_add_os_root_region(void ** alloc, size_t size) // size in words, not bytes
-{
-    os_root_size[os_roots_i] = size;
-    os_root[os_roots_i++] = alloc;
-    assert(os_roots_i <= 256);
-}
+static inline void _gc_add_os_root_region(void ** alloc, size_t size); // size in words, not bytes
 static inline void gc_add_custom_root_region(void ** alloc, size_t size) // size in words, not bytes
 {
     custom_root_size[custom_roots_i] = size;
@@ -567,78 +540,57 @@ struct GcThreadRegInfo
     void lock_from_gc()
     {
         if (_gc_debug_spew) puts("m.a");
-        if (_gc_debug_spew) puts("m.b");
         //if (_gc_debug_spew) printf("gc: trying to lock %zd\n", alt_id);
         //printf("gc: trying to lock %zd\n", alt_id);
         mtx.lock();
-        if (_gc_debug_spew) puts("m.c");
-        baton.fetch_add(1);
-        if (_gc_debug_spew) puts("m.d");
+        if (baton == 0)
+            baton.store(1, std::memory_order_release);
+        if (_gc_debug_spew) puts("m.b");
     }
     void unlock_from_gc()
     {
         if (_gc_debug_spew) printf("gc: trying to unlock %zd\n", alt_id);
         mtx.unlock();
         
-        //if (_gc_debug_spew) printf("gc: %d\n", (int)is_locked());
-        
-        while (baton.load() == 1)
-        {
+        while (baton.load(std::memory_order_acquire) == 1)
             std::this_thread::yield();
-        }
+        
         if (_gc_debug_spew) printf("gc: unlocked %zd\n", alt_id);
     }
 };
-
 
 static inline NOINLINE void _gc_safepoint_long_start()
 {
     _gc_fence();
     _gc_safepoint_setup_os();
-    _thread_info->baton.fetch_add(5);
+    _thread_info->baton.fetch_add(5, std::memory_order_acq_rel);
     _thread_info->mtx.unlock();
 }
 static inline NOINLINE void _gc_safepoint_long_end()
 {
     _thread_info->mtx.lock();
-    _thread_info->baton.fetch_sub(5);
+    _thread_info->baton.store(0);
     _gc_fence();
 }
 static inline void _gc_safepoint_impl_lock()
 {
-    auto id = _thread_info->alt_id;
-    //assert(_thread_info);
     if (!_thread_info || !_gc_threads_must_wait_for_gc.load())
         return;
     
+    auto id = _thread_info->alt_id;
     if (_gc_debug_spew) printf("thread %zd unlocking\n", id);
-    _thread_info->baton.store(0);
+    _thread_info->baton.store(0, std::memory_order_release);
     
     _thread_info->mtx.unlock();
     // vvvvv printing or allocating in here is FORBIDDEN vvvvv
     
-    //printf("thread %zd waiting for baton\n", id);
-    
-    while (!_thread_info->baton.load())
-    {
-        auto x = _gc_threads_must_wait_for_gc.load();
-        (void)x; // for viewing with debuggers
+    while (!_thread_info->baton.load(std::memory_order_acquire))
         std::this_thread::yield();
-    }
-    //printf("thread %zd passing baton\n", id);
-    //while (_thread_info->baton.load() && _gc_threads_must_wait_for_gc.load())
-    //{
-    //    auto x = _gc_threads_must_wait_for_gc.load();
-    //    _gc_fence();
-    //    std::this_thread::yield();
-    //}
-    
-    //printf("thread %zd locking (%p)\n", id, &_thread_info->mtx);
     
     // ^^^^^ printing or allocating in here is FORBIDDEN ^^^^^
     _thread_info->mtx.lock();
     if (_gc_debug_spew) printf("thread %zd locked! returning baton\n", id);
-    _thread_info->baton.fetch_sub(1);
+    _thread_info->baton.store(0, std::memory_order_release);
 }
     
 #include <mutex>
@@ -788,7 +740,6 @@ static inline void _gc_thread_suspend(GcThreadRegInfo * info);
 static inline void _gc_thread_unsuspend(GcThreadRegInfo * info);
 
 static size_t run_count = 0;
-
         
 static inline void sweeper(
     std::atomic_size_t * filled_num, std::atomic_size_t * size, std::atomic_size_t * n3,
@@ -839,6 +790,24 @@ static inline void sweeper(
     //_walloc_flush_freelists();
 }
 
+static inline void _gc_add_os_root_region(void ** alloc, size_t size) // size in words, not bytes
+{
+    auto top = _thread_info_list;
+    // skip the stacks of registered threads
+    while (top)
+    {
+        //printf("stack lo is: %p\n", top->stack_lo);
+        if (alloc == (void **)top->stack_lo)
+            break;
+        top = top->next;
+    }
+    if (top) return;
+    
+    os_root_size[os_roots_i] = size;
+    os_root[os_roots_i++] = alloc;
+    assert(os_roots_i <= 256);
+}
+
 static inline unsigned long int _gc_loop(void *)
 {
     bool silent = 1;
@@ -859,15 +828,15 @@ static inline unsigned long int _gc_loop(void *)
         
         static size_t prev_size = 0; // after sweep
         static size_t test_size = 0;
-        if (test_size < prev_size * 2)
+        if (test_size < prev_size * _gc_run_growth_threshold)
         {
             _gc_table_mutex.lock();
             test_size = gc_table_bytes;
             _gc_table_mutex.unlock();
             
-            if (test_size < prev_size * 2)
+            if (test_size < prev_size * _gc_run_growth_threshold)
             {
-                std::this_thread::yield();
+                _gc_long_yield();
                 continue;
             }
         }
@@ -1034,6 +1003,8 @@ static inline unsigned long int _gc_loop(void *)
             //    top->alt_id, _gc_context_get_rip((Context *)top->context),
             //    _gc_context_get_rsp((Context *)top->context), (void *)top->context);
             
+            //printf("GC thread RSP is near... %p\n", &stack);
+            
             size_t * stack_top = (size_t *)top->stack_hi;
             //printf("%zu: %zX %zX %zX\n", top->alt_id, top->stack_lo, (size_t)stack, top->stack_hi);
             //if ((size_t)stack >= top->stack_hi)
@@ -1154,7 +1125,7 @@ static inline unsigned long int _gc_loop(void *)
         if (GC_TABLE_BITS >= 16)
         {
             std::vector<std::thread> threads;
-            const size_t threadcount = 8;
+            const size_t threadcount = 4;
             for (size_t i = 0; i < threadcount; i++)
             {
                 size_t start = GC_TABLE_SIZE * i / threadcount;

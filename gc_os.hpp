@@ -59,13 +59,14 @@ static inline size_t _gc_context_get_size()
 }
 static inline void _gc_safepoint_setup_os()
 {
+    _gc_awake_long_yield();
 }
 static inline void _gc_get_data_sections()
 {
-    _gc_add_os_root_reset();
-    //static int found = 0;
-    //if (found) return;
-    //found = 1;
+    //_gc_add_os_root_reset();
+    static int found = 0;
+    if (found) return;
+    found = 1;
     
     HANDLE process = GetCurrentProcess();
 
@@ -125,9 +126,13 @@ static inline void gc_run_startup()
     gc_add_current_thread();
 }
 
+static inline HANDLE _gc_long_yield_wake_event = 0;
+
 static size_t _gc_thread = 0;
 extern "C" int gc_start()
 {
+    _gc_long_yield_wake_event = CreateEvent(0, false, false, 0);
+    
     gc_table = (size_t ***)_walloc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
     gc_run_startup();
     
@@ -154,6 +159,8 @@ extern "C" int gc_end()
     _gc_stop = 0;
     _gc_fence();
     
+    CloseHandle(_gc_long_yield_wake_event);
+    
     printf("seconds wasted with GC thread blocking main thread: %.4f\n", wasted_seconds);
     printf("pause\tcmd\twhiten\troots\tmark\tsweep\thipause\thxtable_bits\n");
     printf("%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%zu\n", secs_pause, secs_cmd, secs_whiten, secs_roots, secs_mark, secs_sweep, max_pause_time, GC_TABLE_BITS);
@@ -161,6 +168,30 @@ extern "C" int gc_end()
 }
 struct GcCanary { GcCanary() { gc_start(); } ~GcCanary() { gc_end(); } };
 static GcCanary _gc_canary = GcCanary();
+
+static inline std::atomic_int _gc_yield_counter = 0;
+static inline void _gc_awake_long_yield()
+{
+    _gc_yield_counter = 0;
+    SetEvent(_gc_long_yield_wake_event);
+}
+static inline void _gc_long_yield()
+{
+    HANDLE thread = GetCurrentThread();
+    int priority = GetThreadPriority(thread);
+    SetThreadPriority(thread, THREAD_PRIORITY_LOWEST);
+    
+    _gc_yield_counter++;
+    std::this_thread::yield();
+    Sleep(0);
+    if (_gc_yield_counter > 1000)
+    {
+        _gc_yield_counter = 0;
+        WaitForSingleObject(_gc_long_yield_wake_event, 1);
+    }
+    
+    SetThreadPriority(thread, priority);
+}
 
 #else // WIN32 -> LINUX
 
@@ -228,20 +259,24 @@ static inline size_t _gc_get_heap_start()
 }
 static inline void _gc_get_data_sections()
 {
-    _gc_add_os_root_reset();
-    //static int found = 0;
-    //if (found) return;
-    //found = 1;
+    //_gc_add_os_root_reset();
+    static int found = 0;
+    if (found) return;
+    found = 1;
     
     FILE * maps = fopen("/proc/self/maps", "r");
     assert(maps);
     char line[256] = {};
     size_t heap_start = _gc_get_heap_start();
+    //size_t prev_end = 0;
+    //bool prev_noperm = false;
     while (fgets(line, sizeof(line), maps))
     {
         size_t i = 0;
         while (line[i] != '\t' && line[i] != ' ' && i < 255) i++;
         if (i > 200) return;
+        //prev_noperm = line[i+1] == '-' && line[i+2] == '-' && line[i+3] == '-';
+        
         if (line[i+1] != 'r' || line[i+2] != 'w') continue;
         
         char * l = &line[0];
@@ -259,13 +294,16 @@ static inline void _gc_get_data_sections()
         if (heap_start >= start && heap_start < end)
             continue;
         
-        _gc_add_os_root_region((void **)start, (end-start) / sizeof(size_t));
+        //prev_end = end;
+        
         /*
+        _gc_add_os_root_region((void **)start, (end-start) / sizeof(size_t));
         printf("%s  ", line);
         printf("%zd\n", (end-start) / sizeof(size_t));
+        
         if ((end-start) / sizeof(size_t) > 100000)
         {
-            for (size_t j = 0; j < 512; j++)
+            for (size_t j = 0; j < 8192; j++)
             {
                 for (size_t i = 0; i < 16; i++)
                     printf("%02X ", ((uint8_t *)start)[i+j]);
@@ -275,7 +313,7 @@ static inline void _gc_get_data_sections()
         }
         */
     }
-    //printf("NOTE: our heap starts at %zX\n", heap_start);
+    printf("NOTE: our heap starts at %zX\n", heap_start);
 }
 
 static inline size_t _gc_get_stack_hi()
@@ -360,6 +398,8 @@ extern "C" int gc_end()
 }
 struct GcCanary { GcCanary() { gc_start(); } ~GcCanary() { gc_end(); } };
 static GcCanary _gc_canary = GcCanary();
+
+static inline void _gc_long_yield() { sleep(0); }
 
 #endif // else of WIN32
 

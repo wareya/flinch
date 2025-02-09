@@ -7,54 +7,65 @@
 #define VC_EXTRALEAN
 #include <windows.h>
 #include <psapi.h>
+#include <processthreadsapi.h>
 
 struct Context { CONTEXT ctx; };
-
-static inline Context *_gc_suspend_main_and_get_context()
+static inline Context * _gc_get_threadlocal_ctx()
 {
-    // suspend main thread to read its registers and stack
-    static Context ctx = {};
-    //ctx.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
-    ctx.ctx.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS;
-    DWORD rval = SuspendThread((HANDLE)_main_thread);
-    int nx = 100000;
-    while (rval == (DWORD)-1 && nx-- > 0)
-        rval = SuspendThread((HANDLE)_main_thread);
-    assert(rval != (DWORD)-1);
-    
-    assert(GetThreadContext((HANDLE)_main_thread, &ctx.ctx));
-    //printf("rbp:%p\trsp:%p\trip:%p\tstack height:%zu\n", (void *)ctx.Rbp, (void *)ctx.Rsp, (void *)ctx.Rip, _main_stack_hi-ctx.Rsp);
-    
+    static thread_local Context ctx = {};
     return &ctx;
+}
+static inline void _gc_thread_suspend(GcThreadRegInfo * info)
+{
+    auto & ctx = *info->context;
+    ctx.ctx.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_FLOATING_POINT | CONTEXT_DEBUG_REGISTERS;
+    
+    DWORD rval = SuspendThread((HANDLE)info->alt_id);
+    int nx = 1000;
+    while (rval == (DWORD)-1 && nx-- > 0)
+    {
+        std::this_thread::yield();
+        Sleep(0);
+        rval = SuspendThread((HANDLE)info->alt_id);
+    }
+    assert(rval != (DWORD)-1);
+    _gc_fence();
+    assert(GetThreadContext((HANDLE)info->alt_id, &ctx.ctx));
+}
+
+static inline void _gc_thread_unsuspend(GcThreadRegInfo * info)
+{
+    DWORD rval = ResumeThread((HANDLE)info->alt_id);
+    int nx = 1000;
+    while (rval == (DWORD)-1 && nx-- > 0)
+    {
+        std::this_thread::yield();
+        Sleep(0);
+        rval = ResumeThread((HANDLE)info->alt_id);
+    }
+    assert(rval != (DWORD)-1);
 }
 static inline size_t _gc_context_get_rsp(Context * ctx)
 {
     return (size_t)ctx->ctx.Rsp;
 }
+static inline size_t _gc_context_get_rip(Context * ctx)
+{
+    return (size_t)ctx->ctx.Rip;
+}
 static inline size_t _gc_context_get_size()
 {
     return sizeof(CONTEXT);
 }
-static inline void _gc_unsuspend_main()
+static inline void _gc_safepoint_setup_os()
 {
-    ResumeThread((HANDLE)_main_thread);
-}
-static inline void _gc_safepoint_impl_os()
-{
-    while (!_gc_baton_atomic) { fence(); }
-    fence();
-    safepoint_mutex.unlock();
-    while (_gc_baton_atomic) { fence(); }
-    fence();
-    safepoint_mutex.lock(); // this is the point at which the main thread gets """suspended"""
-    // and unsuspended
-    fence();
 }
 static inline void _gc_get_data_sections()
 {
-    static int found = 0;
-    if (found) return;
-    found = 1;
+    _gc_add_os_root_reset();
+    //static int found = 0;
+    //if (found) return;
+    //found = 1;
     
     HANDLE process = GetCurrentProcess();
 
@@ -74,7 +85,7 @@ static inline void _gc_get_data_sections()
             if (VirtualQuery(address, &memInfo, sizeof(memInfo)))
             {
                 if (memInfo.State == MEM_COMMIT && (memInfo.Protect & PAGE_READWRITE))
-                    gc_add_custom_root_region((void **)memInfo.BaseAddress, memInfo.RegionSize / sizeof(size_t));
+                    _gc_add_os_root_region((void **)memInfo.BaseAddress, memInfo.RegionSize / sizeof(size_t));
                 address += memInfo.RegionSize;
             }
             else
@@ -83,28 +94,41 @@ static inline void _gc_get_data_sections()
     }
 }
 
-static inline void gc_run_startup()
+static inline size_t _gc_get_stack_hi()
 {
-    if (_main_thread != 0)
-        return;
-    
+    ULONGLONG lo;
+    ULONGLONG hi;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    return (size_t)hi;
+}
+static inline size_t _gc_get_stack_lo()
+{
+    ULONGLONG lo;
+    ULONGLONG hi;
+    GetCurrentThreadStackLimits(&lo, &hi);
+    return (size_t)lo;
+}
+static inline size_t _gc_thread_id_acquire()
+{
     HANDLE h;
     auto cprc = GetCurrentProcess();
     auto cthd = GetCurrentThread();
     assert(DuplicateHandle(cprc, cthd, cprc, &h, 0, FALSE, DUPLICATE_SAME_ACCESS));
-    _main_thread = (size_t)h;
-    
-    printf("got main thread! %zd\n", _main_thread);
-    
-    ULONGLONG lo;
-    ULONGLONG hi;
-    GetCurrentThreadStackLimits(&lo, &hi);
-    _main_stack_hi = (size_t)hi;
+    return (size_t)h;
+}
+static inline void _gc_thread_id_release(size_t h)
+{
+    CloseHandle((HANDLE)h);
+}
+static inline void gc_run_startup()
+{
+    gc_add_current_thread();
 }
 
 static size_t _gc_thread = 0;
 extern "C" int gc_start()
 {
+    gc_table = (size_t ***)_walloc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
     gc_run_startup();
     
     std::atomic_uint8_t dummy;
@@ -119,14 +143,16 @@ extern "C" int gc_start()
 extern "C" int gc_end()
 {
     _gc_stop = 1;
-    WaitForSingleObject((HANDLE)_gc_thread, 0);
-    fence();
+    puts("waiting for GC thread to stop...");
+    auto r = WaitForSingleObject((HANDLE)_gc_thread, INFINITE);
+    printf("??? %ld\n", r);
+    _gc_fence();
     CloseHandle((HANDLE)_gc_thread);
     _gc_thread = 0;
     
-    fence();
+    _gc_fence();
     _gc_stop = 0;
-    fence();
+    _gc_fence();
     
     printf("seconds wasted with GC thread blocking main thread: %.4f\n", wasted_seconds);
     printf("pause\tcmd\twhiten\troots\tmark\tsweep\thipause\thxtable_bits\n");
@@ -152,19 +178,29 @@ static GcCanary _gc_canary = GcCanary();
 #include <ucontext.h>
 
 struct Context { struct ucontext_t ctx; };
-static Context _gc_ctx = {};
+static thread_local Context ctx = {};
 
-static pid_t _current_pid;
-
-static inline Context * _gc_suspend_main_and_get_context()
+static inline Context * _gc_get_threadlocal_ctx()
 {
-    // context acquisition handled by main thread
-    // suspension handled by lock
-    return &_gc_ctx;
+    return &ctx;
+}
+static inline void _gc_thread_suspend(GcThreadRegInfo * info)
+{
+    // not done on linux
+    (void)info;
+}
+static inline void _gc_thread_unsuspend(GcThreadRegInfo * info)
+{
+    // handled in _gc_safepoint_setup_os
+    (void)info;
 }
 static inline size_t _gc_context_get_rsp(Context * ctx)
 {
-    return (size_t)ctx->ctx.uc_mcontext.gregs[REG_RSP];
+    return (size_t)ctx->ctx.uc_mcontext.gregs[REG_RSP] - (128 / sizeof(size_t));
+}
+static inline size_t _gc_context_get_rip(Context * ctx)
+{
+    return (size_t)ctx->ctx.uc_mcontext.gregs[REG_RIP];
 }
 static inline size_t _gc_context_get_size()
 {
@@ -174,15 +210,16 @@ static inline void _gc_unsuspend_main()
 {
     // handled by lock
 }
-
-static inline void _gc_safepoint_impl_os()
+static inline void _gc_thread_id_release(size_t id)
 {
-    while (!_gc_baton_atomic) { }
-    safepoint_mutex.unlock();
-    assert(!getcontext(&_gc_ctx.ctx));
-    while (_gc_baton_atomic) { }
-    safepoint_mutex.lock(); // this is the point at which the main thread gets """suspended"""
-    // and unsuspended
+    (void)id;
+    // not needed on linux
+}
+
+static inline void _gc_safepoint_setup_os()
+{
+    assert(!getcontext(&ctx.ctx));
+    //puts("got context!");
 }
 
 static inline size_t _gc_get_heap_start()
@@ -191,9 +228,10 @@ static inline size_t _gc_get_heap_start()
 }
 static inline void _gc_get_data_sections()
 {
-    static int found = 0;
-    if (found) return;
-    found = 1;
+    _gc_add_os_root_reset();
+    //static int found = 0;
+    //if (found) return;
+    //found = 1;
     
     FILE * maps = fopen("/proc/self/maps", "r");
     assert(maps);
@@ -221,7 +259,7 @@ static inline void _gc_get_data_sections()
         if (heap_start >= start && heap_start < end)
             continue;
         
-        gc_add_custom_root_region((void **)start, (end-start) / sizeof(size_t));
+        _gc_add_os_root_region((void **)start, (end-start) / sizeof(size_t));
         /*
         printf("%s  ", line);
         printf("%zd\n", (end-start) / sizeof(size_t));
@@ -240,24 +278,34 @@ static inline void _gc_get_data_sections()
     //printf("NOTE: our heap starts at %zX\n", heap_start);
 }
 
-static inline void gc_run_startup()
+static inline size_t _gc_get_stack_hi()
 {
-    if (_main_thread != 0)
-        return;
-    
-    _gc_get_data_sections();
-    _current_pid = getpid();
-    _main_thread = gettid();
-    
-    printf("got main thread! %zd\n", _main_thread);
-    
     size_t lo;
     size_t size;
     pthread_attr_t attr;
     pthread_getattr_np(pthread_self(), &attr);
     pthread_attr_getstack(&attr, (void **)&lo, &size);
     pthread_attr_destroy(&attr);
-    _main_stack_hi = lo+size;
+    return lo + size;
+}
+static inline size_t _gc_get_stack_lo()
+{
+    size_t lo;
+    size_t size;
+    pthread_attr_t attr;
+    pthread_getattr_np(pthread_self(), &attr);
+    pthread_attr_getstack(&attr, (void **)&lo, &size);
+    pthread_attr_destroy(&attr);
+    return lo;
+}
+static inline size_t _gc_thread_id_acquire()
+{
+    return gettid();
+}
+static inline void gc_run_startup()
+{
+    _gc_get_data_sections();
+    gc_add_current_thread();
 }
 
 static inline void * _gc_loop_wrapper(void * x)
@@ -266,17 +314,18 @@ static inline void * _gc_loop_wrapper(void * x)
     _gc_loop(x);
     puts("exiting...");
     fflush(stdout);
-    fence();
+    _gc_fence();
     pthread_exit(0);
     puts("exiting?");
     fflush(stdout);
-    fence();
+    _gc_fence();
     return 0;
 }
 
 static pthread_t _gc_thread = 0;
 extern "C" int gc_start()
 {
+    gc_table = (size_t ***)_walloc_raw_calloc(GC_TABLE_SIZE, sizeof(size_t **));
     gc_run_startup();
     
     std::atomic_uint8_t dummy;
@@ -291,18 +340,18 @@ extern "C" int gc_end()
 {
     puts("going to try to exit gc");
     _gc_stop = 1;
-    safepoint_mutex.unlock();
+    //safepoint_mutex.unlock();
     puts("mutex unlocked...?");
     
     puts("trying to join");
     pthread_join(_gc_thread, 0);
-    fence();
+    _gc_fence();
     _gc_thread = 0;
     puts("got out");
     
-    fence();
+    _gc_fence();
     _gc_stop = 0;
-    fence();
+    _gc_fence();
     
     printf("seconds wasted with GC thread blocking main thread: %.4f\n", wasted_seconds);
     printf("pause\tcmd\twhiten\troots\tmark\tsweep\thipause\thxtable_bits\n");

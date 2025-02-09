@@ -169,7 +169,7 @@ struct PODVec
     {
         #ifdef CUSTOM_GC
         _nogc = true;
-        if (mbuffer) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, 0);
+        if (mbuffer) gc_set_trace_none(mbuffer);
         #endif
     }
     
@@ -203,7 +203,7 @@ struct PODVec
     { 
         #ifdef CUSTOM_GC
         if (mbuffer && !_nogc) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, mcapacity);
-        if (mbuffer && _nogc) gc_set_trace_func(mbuffer, vec_dyntype_trace_func, 0);
+        if (mbuffer && _nogc) gc_set_trace_none(mbuffer);
         #endif
     }
     

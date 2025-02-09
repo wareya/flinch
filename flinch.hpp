@@ -31,7 +31,9 @@ struct DynamicType;
 
 #else
 
+#ifdef USE_MIMALLOC
 #include <mimalloc.h>
+#endif
 
 #include "gc.hpp"
 

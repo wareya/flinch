@@ -1119,13 +1119,15 @@ static inline unsigned long int _gc_loop(void *)
         std::atomic_size_t filled_num = 0;
         std::atomic_size_t size = 0;
         
-        
         //puts("starting sweep...");
         
         if (GC_TABLE_BITS >= 16)
         {
+            size_t threadcount = std::thread::hardware_concurrency();
+            threadcount = threadcount > 1 ? threadcount - 1 : threadcount ? threadcount : 1;
+            if (threadcount > 16) threadcount = 16;
+            
             std::vector<std::thread> threads;
-            const size_t threadcount = 4;
             for (size_t i = 0; i < threadcount; i++)
             {
                 size_t start = GC_TABLE_SIZE * i / threadcount;
